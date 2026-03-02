@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import knex, { type Knex } from "knex";
+import fs from "node:fs";
 
 dotenv.config({ path: ".env.local", override: false });
 dotenv.config({ override: false });
@@ -50,8 +51,22 @@ function resolveConnectionConfig() {
     };
   }
 
-  const rawHost = getRequiredEnv("MYSQL_HOST");
-  const host = rawHost === "localhost" ? "127.0.0.1" : rawHost;
+  const host = getRequiredEnv("MYSQL_HOST").trim() || "localhost";
+  if (host === "localhost" || host === "127.0.0.1") {
+    const socketCandidates = [
+      "/var/run/mysqld/mysqld.sock",
+      "/var/lib/mysql/mysql.sock",
+      "/tmp/mysql.sock",
+    ];
+    const detectedSocket = socketCandidates.find((candidate) => fs.existsSync(candidate));
+    if (detectedSocket) {
+      return {
+        ...base,
+        socketPath: detectedSocket,
+      };
+    }
+  }
+
   return {
     ...base,
     host,

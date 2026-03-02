@@ -1,4 +1,5 @@
 const path = require("path");
+const fs = require("fs");
 const dotenv = require("dotenv");
 
 dotenv.config({ path: path.resolve(__dirname, ".env.local"), override: false });
@@ -40,8 +41,22 @@ function buildConnection() {
     };
   }
 
-  const rawHost = process.env.MYSQL_HOST;
-  const host = rawHost === "localhost" ? "127.0.0.1" : rawHost;
+  const host = (process.env.MYSQL_HOST || "localhost").trim() || "localhost";
+  if (host === "localhost" || host === "127.0.0.1") {
+    const socketCandidates = [
+      "/var/run/mysqld/mysqld.sock",
+      "/var/lib/mysql/mysql.sock",
+      "/tmp/mysql.sock",
+    ];
+    const detectedSocket = socketCandidates.find((candidate) => fs.existsSync(candidate));
+    if (detectedSocket) {
+      return {
+        ...base,
+        socketPath: detectedSocket,
+      };
+    }
+  }
+
   return {
     ...base,
     host,

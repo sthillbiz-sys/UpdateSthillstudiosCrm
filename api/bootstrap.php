@@ -102,25 +102,39 @@ function db(): PDO {
         return $pdo;
     }
 
-    $host = (string) env('MYSQL_HOST', '127.0.0.1');
+    $host = trim((string) env('MYSQL_HOST', 'localhost'));
     $port = (string) env('MYSQL_PORT', '3306');
+    $socketPath = trim((string) env('MYSQL_SOCKET_PATH', ''));
     $user = (string) env('MYSQL_USER', '');
     $pass = (string) env('MYSQL_PASSWORD', '');
     $name = (string) env('MYSQL_DATABASE', '');
     $charset = 'utf8mb4';
 
-    if ($host === '') {
-        $host = '127.0.0.1';
+    if ($socketPath === '' && $host === '') {
+        $host = 'localhost';
     }
-    if ($host === 'localhost') {
-        // Prefer TCP explicitly for shared hosting environments.
-        $host = '127.0.0.1';
+    if ($socketPath === '' && ($host === 'localhost' || $host === '127.0.0.1')) {
+        $socketCandidates = [
+            '/var/run/mysqld/mysqld.sock',
+            '/var/lib/mysql/mysql.sock',
+            '/tmp/mysql.sock',
+        ];
+        foreach ($socketCandidates as $candidate) {
+            if (is_file($candidate)) {
+                $socketPath = $candidate;
+                break;
+            }
+        }
     }
     if ($user === '' || $name === '') {
         throw new RuntimeException('Missing MySQL configuration (MYSQL_USER / MYSQL_DATABASE).');
     }
 
-    $dsn = "mysql:host={$host};port={$port};dbname={$name};charset={$charset}";
+    if ($socketPath !== '') {
+        $dsn = "mysql:unix_socket={$socketPath};dbname={$name};charset={$charset}";
+    } else {
+        $dsn = "mysql:host={$host};port={$port};dbname={$name};charset={$charset}";
+    }
     $pdo = new PDO($dsn, $user, $pass, [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,

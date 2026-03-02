@@ -106,6 +106,7 @@ jobs:
           CRM_BASE_PATH: /employeelogin
           MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
           MYSQL_PORT: ${{ secrets.MYSQL_PORT }}
+          MYSQL_SOCKET_PATH: ${{ secrets.MYSQL_SOCKET_PATH }}
           MYSQL_USER: ${{ secrets.MYSQL_USER }}
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
           MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
@@ -126,7 +127,7 @@ jobs:
           username: ${{ secrets.HOSTINGER_SSH_USER }}
           key: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
           port: ${{ secrets.HOSTINGER_SSH_PORT }}
-          envs: DEPLOY_PATH,NPM_BIN,NODE_ENV,PORT,CRM_BASE_PATH,MYSQL_HOST,MYSQL_PORT,MYSQL_USER,MYSQL_PASSWORD,MYSQL_DATABASE,MYSQL_SSL,MYSQL_SSL_CA_BASE64,SQLITE_SOURCE_PATH,ALLOW_SIGNUP,JWT_SECRET,CRM_ADMIN_NAME,CRM_ADMIN_EMAIL,CRM_ADMIN_PASSWORD,GEMINI_API_KEY,RUN_SQLITE_IMPORT,CRM_START_MODE,CRM_ENV_FILE
+          envs: DEPLOY_PATH,NPM_BIN,NODE_ENV,PORT,CRM_BASE_PATH,MYSQL_HOST,MYSQL_PORT,MYSQL_SOCKET_PATH,MYSQL_USER,MYSQL_PASSWORD,MYSQL_DATABASE,MYSQL_SSL,MYSQL_SSL_CA_BASE64,SQLITE_SOURCE_PATH,ALLOW_SIGNUP,JWT_SECRET,CRM_ADMIN_NAME,CRM_ADMIN_EMAIL,CRM_ADMIN_PASSWORD,GEMINI_API_KEY,RUN_SQLITE_IMPORT,CRM_START_MODE,CRM_ENV_FILE
           script_stop: true
           script: |
             set -eu
@@ -197,13 +198,14 @@ jobs:
 
             if [ -n "${CRM_ENV_FILE:-}" ]; then
               printf "%s\n" "${CRM_ENV_FILE}" > .env.local
-            elif [ -n "${MYSQL_HOST:-}" ]; then
+            elif [ -n "${MYSQL_HOST:-}" ] || [ -n "${MYSQL_SOCKET_PATH:-}" ]; then
               {
                 printf "PORT=%s\n" "${PORT:-3000}"
                 printf "NODE_ENV=%s\n" "${NODE_ENV:-production}"
                 printf "CRM_BASE_PATH=%s\n" "${CRM_BASE_PATH:-/employeelogin}"
-                printf "MYSQL_HOST=%s\n" "${MYSQL_HOST}"
+                printf "MYSQL_HOST=%s\n" "${MYSQL_HOST:-localhost}"
                 printf "MYSQL_PORT=%s\n" "${MYSQL_PORT:-3306}"
+                printf "MYSQL_SOCKET_PATH=%s\n" "${MYSQL_SOCKET_PATH:-}"
                 printf "MYSQL_USER=%s\n" "${MYSQL_USER}"
                 printf "MYSQL_PASSWORD=%s\n" "${MYSQL_PASSWORD}"
                 printf "MYSQL_DATABASE=%s\n" "${MYSQL_DATABASE}"
@@ -218,7 +220,7 @@ jobs:
                 printf "GEMINI_API_KEY=%s\n" "${GEMINI_API_KEY:-}"
               } > .env.local
             else
-              echo "Missing database/app secrets. Set CRM_ENV_FILE or MYSQL_* and auth secrets."
+              echo "Missing database/app secrets. Set CRM_ENV_FILE or MYSQL_HOST/MYSQL_SOCKET_PATH + auth secrets."
               exit 1
             fi
 
@@ -278,7 +280,10 @@ jobs:
             echo "[deploy] installing dependencies"
             npm ci
             echo "[deploy] running migrations"
-            npm run migrate:latest
+            if ! npm run migrate:latest; then
+              echo "[deploy] migration failed. Verify MYSQL_HOST/MYSQL_PORT or MYSQL_SOCKET_PATH, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE."
+              exit 1
+            fi
 
             if [ "${RUN_SQLITE_IMPORT:-false}" = "true" ]; then
               IMPORT_PATH="${SQLITE_SOURCE_PATH:-./crm.db}"
