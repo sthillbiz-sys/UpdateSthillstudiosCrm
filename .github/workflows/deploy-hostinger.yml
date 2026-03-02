@@ -1,0 +1,336 @@
+name: Deploy To Hostinger (SSH)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+concurrency:
+  group: deploy-hostinger
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build app assets
+        run: npm run build
+
+      - name: Ensure build output exists
+        run: test -f dist/index.html
+
+      - name: Add deploy marker
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .deploy-timestamp
+          echo "${GITHUB_SHA}" >> .deploy-timestamp
+
+      - name: Package deploy bundle
+        run: |
+          rm -rf .deploy-stage
+          mkdir -p .deploy-stage
+
+          if command -v rsync >/dev/null 2>&1; then
+            rsync -a --delete \
+              --exclude ".git/" \
+              --exclude ".github/" \
+              --exclude "node_modules/" \
+              --exclude ".deploy-stage/" \
+              --exclude "deploy.tgz" \
+              . .deploy-stage/
+          else
+            cp -a . .deploy-stage/
+            rm -rf .deploy-stage/.git .deploy-stage/.github .deploy-stage/node_modules .deploy-stage/deploy.tgz .deploy-stage/.deploy-stage
+          fi
+
+          tar -czf deploy.tgz -C .deploy-stage .
+          rm -rf .deploy-stage
+
+      - name: Upload bundle via SCP (retry)
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PRIVATE_KEY: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
+        run: |
+          set -eu
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf "%s\n" "$HOSTINGER_SSH_PRIVATE_KEY" > ~/.ssh/id_hostinger
+          chmod 600 ~/.ssh/id_hostinger
+          ssh-keyscan -p "$HOSTINGER_SSH_PORT" -H "$HOSTINGER_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          chmod 644 ~/.ssh/known_hosts
+
+          for attempt in 1 2 3 4 5; do
+            echo "SCP attempt $attempt/5"
+            if scp \
+              -i ~/.ssh/id_hostinger \
+              -P "$HOSTINGER_SSH_PORT" \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=accept-new \
+              -o ConnectTimeout=30 \
+              -o ServerAliveInterval=15 \
+              -o ServerAliveCountMax=3 \
+              deploy.tgz "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:/home/u497238762/deploy.tgz"; then
+              echo "SCP upload successful."
+              exit 0
+            fi
+
+            sleep $((attempt * 10))
+          done
+
+          echo "SCP upload failed after 5 attempts."
+          exit 1
+
+      - name: Deploy on remote host
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DEPLOY_PATH: /home/u497238762/domains/sthillstudios.com/public_html/employeelogin
+          NPM_BIN: ${{ secrets.HOSTINGER_NPM_BIN }}
+          NODE_ENV: production
+          PORT: ${{ secrets.CRM_PORT }}
+          CRM_BASE_PATH: /employeelogin
+          MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
+          MYSQL_PORT: ${{ secrets.MYSQL_PORT }}
+          MYSQL_USER: ${{ secrets.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
+          MYSQL_SSL: ${{ secrets.MYSQL_SSL }}
+          MYSQL_SSL_CA_BASE64: ${{ secrets.MYSQL_SSL_CA_BASE64 }}
+          SQLITE_SOURCE_PATH: ${{ secrets.SQLITE_SOURCE_PATH }}
+          ALLOW_SIGNUP: ${{ secrets.ALLOW_SIGNUP }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CRM_ADMIN_NAME: ${{ secrets.CRM_ADMIN_NAME }}
+          CRM_ADMIN_EMAIL: ${{ secrets.CRM_ADMIN_EMAIL }}
+          CRM_ADMIN_PASSWORD: ${{ secrets.CRM_ADMIN_PASSWORD }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          RUN_SQLITE_IMPORT: ${{ secrets.RUN_SQLITE_IMPORT }}
+          CRM_START_MODE: ${{ secrets.CRM_START_MODE }}
+          CRM_ENV_FILE: ${{ secrets.CRM_ENV_FILE }}
+        with:
+          host: ${{ secrets.HOSTINGER_SSH_HOST }}
+          username: ${{ secrets.HOSTINGER_SSH_USER }}
+          key: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
+          port: ${{ secrets.HOSTINGER_SSH_PORT }}
+          envs: DEPLOY_PATH,NPM_BIN,NODE_ENV,PORT,CRM_BASE_PATH,MYSQL_HOST,MYSQL_PORT,MYSQL_USER,MYSQL_PASSWORD,MYSQL_DATABASE,MYSQL_SSL,MYSQL_SSL_CA_BASE64,SQLITE_SOURCE_PATH,ALLOW_SIGNUP,JWT_SECRET,CRM_ADMIN_NAME,CRM_ADMIN_EMAIL,CRM_ADMIN_PASSWORD,GEMINI_API_KEY,RUN_SQLITE_IMPORT,CRM_START_MODE,CRM_ENV_FILE
+          script_stop: true
+          script: |
+            set -eu
+            TARGET="${DEPLOY_PATH}"
+            ARCHIVE="/home/u497238762/deploy.tgz"
+            STAGE="/home/u497238762/.deploy-employeelogin-stage"
+            LOG_FILE="$TARGET/.server.log"
+            on_exit() {
+              code="$?"
+              if [ "$code" -eq 0 ]; then
+                return
+              fi
+              echo "Deploy script failed with exit code ${code}"
+              if [ -f "$LOG_FILE" ]; then
+                echo "Recent server log:"
+                tail -n 120 "$LOG_FILE" || true
+              fi
+            }
+            trap on_exit EXIT
+
+            echo "[deploy] preparing target and staging"
+
+            mkdir -p "$TARGET" "$STAGE"
+            rm -rf "$STAGE"/*
+            tar -xzf "$ARCHIVE" -C "$STAGE"
+            rm -f "$ARCHIVE"
+
+            if command -v rsync >/dev/null 2>&1; then
+              rsync -a --delete \
+                --exclude ".env.local" \
+                --exclude ".env" \
+                --exclude "crm.db" \
+                --exclude "node_modules" \
+                --exclude ".server.pid" \
+                --exclude ".server.log" \
+                "$STAGE"/ "$TARGET"/
+            else
+              find "$TARGET" -mindepth 1 -maxdepth 1 \
+                ! -name ".env.local" \
+                ! -name ".env" \
+                ! -name "crm.db" \
+                ! -name "node_modules" \
+                ! -name ".server.pid" \
+                ! -name ".server.log" \
+                -exec rm -rf {} \;
+              cp -a "$STAGE"/. "$TARGET"/
+            fi
+
+            rm -rf "$STAGE"
+            cd "$TARGET"
+
+            if [ ! -f "$TARGET/dist/index.html" ]; then
+              echo "[deploy] missing dist/index.html in target; build artifact is incomplete"
+              exit 1
+            fi
+            echo "[deploy] publishing built frontend bundle to /employeelogin root"
+            rm -f "$TARGET/index.html"
+            rm -rf "$TARGET/assets"
+            cp -a "$TARGET/dist/index.html" "$TARGET/index.html"
+            cp -a "$TARGET/dist/assets" "$TARGET/assets"
+            if [ -f "$TARGET/.htaccess" ] && grep -q "Do not rewrite API/WS paths (they should be handled upstream)." "$TARGET/.htaccess"; then
+              echo "[deploy] removing legacy generated .htaccess that blocks /employeelogin/api routing"
+              rm -f "$TARGET/.htaccess"
+            fi
+            echo "[deploy] preserving existing Apache/Hostinger routing files (no .htaccess overwrite)"
+
+            echo "[deploy] writing environment file"
+
+            if [ -n "${CRM_ENV_FILE:-}" ]; then
+              printf "%s\n" "${CRM_ENV_FILE}" > .env.local
+            elif [ -n "${MYSQL_HOST:-}" ]; then
+              {
+                printf "PORT=%s\n" "${PORT:-3000}"
+                printf "NODE_ENV=%s\n" "${NODE_ENV:-production}"
+                printf "CRM_BASE_PATH=%s\n" "${CRM_BASE_PATH:-/employeelogin}"
+                printf "MYSQL_HOST=%s\n" "${MYSQL_HOST}"
+                printf "MYSQL_PORT=%s\n" "${MYSQL_PORT:-3306}"
+                printf "MYSQL_USER=%s\n" "${MYSQL_USER}"
+                printf "MYSQL_PASSWORD=%s\n" "${MYSQL_PASSWORD}"
+                printf "MYSQL_DATABASE=%s\n" "${MYSQL_DATABASE}"
+                printf "MYSQL_SSL=%s\n" "${MYSQL_SSL:-false}"
+                printf "MYSQL_SSL_CA_BASE64=%s\n" "${MYSQL_SSL_CA_BASE64:-}"
+                printf "SQLITE_SOURCE_PATH=%s\n" "${SQLITE_SOURCE_PATH:-./crm.db}"
+                printf "ALLOW_SIGNUP=%s\n" "${ALLOW_SIGNUP:-false}"
+                printf "JWT_SECRET=%s\n" "${JWT_SECRET}"
+                printf "CRM_ADMIN_NAME=%s\n" "${CRM_ADMIN_NAME}"
+                printf "CRM_ADMIN_EMAIL=%s\n" "${CRM_ADMIN_EMAIL}"
+                printf "CRM_ADMIN_PASSWORD=%s\n" "${CRM_ADMIN_PASSWORD}"
+                printf "GEMINI_API_KEY=%s\n" "${GEMINI_API_KEY:-}"
+              } > .env.local
+            else
+              echo "Missing database/app secrets. Set CRM_ENV_FILE or MYSQL_* and auth secrets."
+              exit 1
+            fi
+
+            if [ -n "${NPM_BIN:-}" ] && [ -x "${NPM_BIN}" ]; then
+              export PATH="$(dirname "${NPM_BIN}"):$PATH"
+            fi
+
+            if ! command -v npm >/dev/null 2>&1; then
+              for BIN_DIR in \
+                "/opt/alt/alt-nodejs22/root/usr/bin" \
+                "/opt/alt/alt-nodejs20/root/usr/bin" \
+                "/opt/alt/alt-nodejs18/root/usr/bin" \
+                "$HOME/nodevenv/domains/sthillstudios.com/public_html/employeelogin/22/bin" \
+                "$HOME/nodevenv/domains/sthillstudios.com/public_html/employeelogin/20/bin" \
+                "$HOME/nodevenv/domains/sthillstudios.com/public_html/employeelogin/18/bin" \
+                "$HOME/nodevenv/domains/sthillstudios.com/public_html/22/bin" \
+                "$HOME/nodevenv/domains/sthillstudios.com/public_html/20/bin" \
+                "$HOME/nodevenv/domains/sthillstudios.com/public_html/18/bin" \
+                "$HOME/bin" \
+                "/usr/local/bin" \
+                "/usr/bin"; do
+                if [ -x "$BIN_DIR/npm" ]; then
+                  export PATH="$BIN_DIR:$PATH"
+                  break
+                fi
+              done
+            fi
+
+            if ! command -v npm >/dev/null 2>&1; then
+              [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc" || true
+              [ -f "$HOME/.profile" ] && . "$HOME/.profile" || true
+            fi
+
+            if ! command -v npm >/dev/null 2>&1; then
+              for ACTIVATE in \
+                "$HOME"/nodevenv/domains/sthillstudios.com/public_html/employeelogin/*/bin/activate \
+                "$HOME"/nodevenv/domains/sthillstudios.com/public_html/*/bin/activate \
+                "$HOME"/nodevenv/*/bin/activate; do
+                [ -f "$ACTIVATE" ] || continue
+                . "$ACTIVATE" || true
+                if command -v npm >/dev/null 2>&1; then
+                  break
+                fi
+              done
+            fi
+
+            if ! command -v npm >/dev/null 2>&1; then
+              echo "npm is not available in this SSH shell."
+              echo "Set GitHub secret HOSTINGER_NPM_BIN to absolute npm path (example: /opt/alt/alt-nodejs20/root/usr/bin/npm)."
+              echo "Also ensure a Hostinger Node app is created for /public_html/employeelogin so ~/nodevenv/.../bin/activate exists."
+              exit 1
+            fi
+
+            echo "PATH=$PATH"
+            echo "Using npm at: $(command -v npm)"
+            echo "Using node at: $(command -v node)"
+            echo "[deploy] installing dependencies"
+            npm ci
+            echo "[deploy] running migrations"
+            npm run migrate:latest
+
+            if [ "${RUN_SQLITE_IMPORT:-false}" = "true" ]; then
+              IMPORT_PATH="${SQLITE_SOURCE_PATH:-./crm.db}"
+              if [ -f "$IMPORT_PATH" ]; then
+                echo "[deploy] importing SQLite data from $IMPORT_PATH"
+                npm run db:import-sqlite
+              else
+                echo "SQLite source not found at $IMPORT_PATH. Skipping import."
+                echo "If you need import, upload the SQLite file and set SQLITE_SOURCE_PATH."
+              fi
+            fi
+
+            echo "[deploy] runtime start is managed by Hostinger Node App; skipping process start commands."
+            mkdir -p "$TARGET/tmp" || true
+            touch "$TARGET/tmp/restart.txt" || true
+
+            echo "[deploy] probing API health endpoints"
+            API_PROBE_BASE="https://sthillstudios.com"
+            PROBE_PATHS="${CRM_BASE_PATH:-/employeelogin}/api/health ${CRM_BASE_PATH:-/employeelogin}/api/health.php /api/health ${CRM_BASE_PATH:-/employeelogin}/health"
+
+            API_HEALTH_OK="false"
+            for probe_path in $PROBE_PATHS; do
+              probe_url="${API_PROBE_BASE}${probe_path}"
+              echo "[deploy] probe -> ${probe_url}"
+
+              probe_headers="$(mktemp)"
+              probe_body="$(mktemp)"
+              if curl -sS --max-time 20 -D "$probe_headers" -o "$probe_body" "$probe_url"; then
+                status_code="$(awk 'NR==1 {print $2}' "$probe_headers")"
+                content_type="$(awk -F': ' 'BEGIN { IGNORECASE=1 } $1=="Content-Type" { print tolower($2) }' "$probe_headers" | tr -d '\r' | tail -n 1)"
+                body_preview="$(head -c 160 "$probe_body" | tr '\n' ' ')"
+                echo "[deploy] status=${status_code:-unknown} content-type=${content_type:-unknown}"
+                echo "[deploy] body preview: ${body_preview}"
+
+                if [ "${status_code:-}" = "200" ] && echo "${content_type:-}" | grep -q "application/json" && grep -q '"ok"[[:space:]]*:[[:space:]]*true' "$probe_body"; then
+                  API_HEALTH_OK="true"
+                  rm -f "$probe_headers" "$probe_body"
+                  break
+                fi
+              else
+                echo "[deploy] curl failed for ${probe_url}"
+              fi
+              rm -f "$probe_headers" "$probe_body"
+            done
+
+            if [ "$API_HEALTH_OK" != "true" ]; then
+              echo "[deploy] WARNING: no JSON API health endpoint was reachable."
+              echo "[deploy] Check Hostinger Node app URL mapping so one of these works:"
+              echo "  - ${API_PROBE_BASE}${CRM_BASE_PATH:-/employeelogin}/api/health"
+              echo "  - ${API_PROBE_BASE}/api/health"
+              echo "  - ${API_PROBE_BASE}${CRM_BASE_PATH:-/employeelogin}/health"
+            fi
+
+            echo "Deploy complete: $TARGET"
+            ls -la "$TARGET" | head -n 40

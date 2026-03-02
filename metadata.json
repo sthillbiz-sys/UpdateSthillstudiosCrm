@@ -1,0 +1,5 @@
+{
+  "name": "SthillStudios CRM",
+  "description": "A professional CRM dashboard with AI-powered voice capabilities using Gemini Live API.",
+  "requestFramePermissions": ["microphone", "camera"]
+}
