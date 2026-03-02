@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../lib/auth';
+import { LOGO_SRC } from '../lib/assets';
 import {
   LayoutDashboard,
   Users,
@@ -106,7 +107,7 @@ export function CRM() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <img
-                  src="/NEW_sthillstudisoslogo.png"
+                  src={LOGO_SRC}
                   alt="SthillStudios Logo"
                   className="w-40 h-auto"
                 />

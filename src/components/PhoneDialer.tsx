@@ -4,6 +4,7 @@ import { Device } from '@twilio/voice-sdk';
 import { usePresence } from '../lib/presence';
 import { useAuth } from '../lib/auth';
 import { apiPost } from '../lib/api';
+import { LOGO_SRC } from '../lib/assets';
 
 interface PhoneDialerProps {
   onClose?: () => void;
@@ -230,7 +231,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
                 <img
-                  src="/NEW_sthillstudisoslogo.png"
+                  src={LOGO_SRC}
                   alt="SthillStudios"
                   className="h-6 w-auto drop-shadow-lg"
                 />
@@ -278,7 +279,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
               <div className="bg-gradient-to-br from-slate-700 to-slate-800 rounded-xl p-3 shadow-inner border border-slate-600">
                 <div className="flex items-center justify-center mb-1">
                   <img
-                    src="/NEW_sthillstudisoslogo.png"
+                    src={LOGO_SRC}
                     alt="SthillStudios"
                     className="h-4 w-auto opacity-40"
                   />
@@ -436,7 +437,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <img
-                src="/NEW_sthillstudisoslogo.png"
+                src={LOGO_SRC}
                 alt="SthillStudios Logo"
                 className="w-32 h-auto"
               />

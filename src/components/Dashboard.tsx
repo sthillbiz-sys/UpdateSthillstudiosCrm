@@ -1,4 +1,5 @@
 import { useAuth } from '../lib/auth';
+import { LOGO_SRC } from '../lib/assets';
 import { Building2, Calendar, Users2, MessagesSquare, Download, DollarSign } from 'lucide-react';
 
 export function Dashboard() {
@@ -13,7 +14,7 @@ export function Dashboard() {
         <div className="p-8">
           <div className="flex items-center gap-4">
             <img
-              src="/NEW_sthillstudisoslogo.png"
+              src={LOGO_SRC}
               alt="SthillStudios Logo"
               className="w-32 h-auto"
             />
