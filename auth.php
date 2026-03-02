@@ -1,70 +1,33 @@
-<?php
-/**
- * Website Analysis API Endpoint
- * Analyzes a single website for platform detection and issues
- */
+-- Verified Leads Table for BamLead
+-- Stores leads that have been AI-verified and are ready for email outreach
+-- Run this script in your Hostinger phpMyAdmin
 
-require_once __DIR__ . '/config.php';
-require_once __DIR__ . '/includes/functions.php';
-
-header('Content-Type: application/json');
-setCorsHeaders();
-handlePreflight();
-
-// Allow both GET and POST
-if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    $url = isset($_GET['url']) ? trim($_GET['url']) : '';
-} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $input = getJsonInput();
-    $url = isset($input['url']) ? trim($input['url']) : '';
-} else {
-    sendError('Method not allowed', 405);
-}
-
-if (empty($url)) {
-    sendError('URL is required');
-}
-
-// Ensure URL has protocol
-if (!preg_match('/^https?:\/\//', $url)) {
-    $url = 'https://' . $url;
-}
-
-// Validate URL
-if (!filter_var($url, FILTER_VALIDATE_URL)) {
-    sendError('Invalid URL format');
-}
-
-try {
-    $cacheKey = "analyze_website_" . md5($url);
-    
-    // Check cache
-    $cached = getCache($cacheKey);
-    if ($cached !== null) {
-        sendJson([
-            'success' => true,
-            'data' => $cached,
-            'cached' => true
-        ]);
-    }
-    
-    $analysis = analyzeWebsite($url);
-    
-    // Add extra details
-    $analysis['url'] = $url;
-    $analysis['analyzedAt'] = date('c');
-    
-    // Cache results
-    setCache($cacheKey, $analysis);
-    
-    sendJson([
-        'success' => true,
-        'data' => $analysis
-    ]);
-} catch (Exception $e) {
-    if (DEBUG_MODE) {
-        sendError($e->getMessage(), 500);
-    } else {
-        sendError('An error occurred while analyzing the website', 500);
-    }
-}
+CREATE TABLE IF NOT EXISTS verified_leads (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    lead_id VARCHAR(100) NOT NULL,
+    business_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    contact_name VARCHAR(255),
+    phone VARCHAR(50),
+    website VARCHAR(500),
+    address TEXT,
+    platform VARCHAR(100),
+    verified BOOLEAN DEFAULT TRUE,
+    email_valid BOOLEAN DEFAULT FALSE,
+    lead_score INT DEFAULT 0,
+    ai_drafted_message TEXT,
+    verification_status ENUM('pending', 'verifying', 'verified', 'failed') DEFAULT 'verified',
+    issues JSON,
+    source_type ENUM('gmb', 'google', 'bing', 'manual') DEFAULT 'gmb',
+    outreach_status ENUM('pending', 'sent', 'replied', 'converted', 'bounced') DEFAULT 'pending',
+    sent_at TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_user_lead (user_id, lead_id),
+    INDEX idx_user_id (user_id),
+    INDEX idx_email_valid (email_valid),
+    INDEX idx_outreach_status (outreach_status),
+    INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

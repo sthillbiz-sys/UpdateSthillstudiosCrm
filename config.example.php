@@ -1,317 +1,238 @@
+# Backend Deployment & Verification Checklist
+
+## 🚀 Quick Start
+
+Your backend is PHP-based and hosted on Hostinger. This checklist ensures everything works.
+
+---
+
+## Step 1: Upload Files to Hostinger
+
+Upload the entire `hostinger-backend/` folder contents to `/public_html/api/`:
+
+```
+/public_html/api/
+├── .htaccess
+├── admin.php
+├── analyze-leads.php
+├── analyze-website.php
+├── auth.php
+├── config.php          ← Create from config.example.php
+├── cron-email.php
+├── diagnostics.php     ← NEW: System diagnostics
+├── email-outreach.php
+├── error.php
+├── gmb-search.php
+├── google-drive-auth.php    ← NEW: Google Drive OAuth
+├── google-drive-callback.php
+├── google-drive-export.php
+├── health.php
+├── password.php
+├── platform-search.php
+├── stripe.php
+├── stripe-webhook.php
+├── verified-leads.php
+├── verify-lead.php
+├── includes/
+│   ├── auth.php
+│   ├── database.php
+│   ├── email.php
+│   ├── functions.php
+│   ├── ratelimit.php
+│   └── stripe.php
+└── database/
+    ├── schema.sql
+    ├── email_outreach.sql
+    ├── rate_limits.sql
+    ├── subscriptions.sql
+    ├── verification_tokens.sql
+    ├── verified_leads.sql
+    └── google_drive_tokens.sql
+```
+
+---
+
+## Step 2: Create config.php
+
+Copy `config.example.php` to `config.php` and fill in these values:
+
+```php
 <?php
-/**
- * Call Logs API Endpoint
- * Handles saving and retrieving voice call logs
- */
+// DATABASE - Get from Hostinger hPanel → Databases
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'u497238762_bamlead');
+define('DB_USER', 'u497238762_bamlead');
+define('DB_PASS', 'YOUR_REAL_PASSWORD');  // ← CHANGE THIS
 
-require_once __DIR__ . '/includes/database.php';
-require_once __DIR__ . '/includes/auth.php';
-require_once __DIR__ . '/config.php';
+// SERPAPI - For lead search (https://serpapi.com)
+define('SERPAPI_KEY', 'your_serpapi_key_here');  // ← CHANGE THIS
 
-header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
+// EMAIL/SMTP - For sending emails
+define('MAIL_FROM_ADDRESS', 'noreply@bamlead.com');
+define('MAIL_FROM_NAME', 'BamLead');
+define('SMTP_HOST', 'smtp.hostinger.com');
+define('SMTP_PORT', 465);
+define('SMTP_USER', 'noreply@bamlead.com');
+define('SMTP_PASS', 'your_email_password');  // ← CHANGE THIS
+define('SMTP_SECURE', 'ssl');
+define('FRONTEND_URL', 'https://bamlead.com');
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit();
-}
+// STRIPE - For payments (https://dashboard.stripe.com/apikeys)
+define('STRIPE_SECRET_KEY', 'sk_live_...');  // ← CHANGE THIS
+define('STRIPE_PUBLISHABLE_KEY', 'pk_live_...');  // ← CHANGE THIS
+define('STRIPE_WEBHOOK_SECRET', 'whsec_...');  // ← CHANGE THIS
 
-// Authenticate user
-$user = authenticateRequest();
-if (!$user) {
-    http_response_code(401);
-    echo json_encode(['success' => false, 'error' => 'Unauthorized']);
-    exit();
-}
+// Price IDs from Stripe Dashboard → Products
+define('STRIPE_PRICES', [
+    'basic' => [
+        'monthly' => 'price_xxx',  // ← Your Basic monthly price ID
+        'yearly' => 'price_xxx',
+    ],
+    'pro' => [
+        'monthly' => 'price_xxx',  // ← Your Pro monthly price ID
+        'yearly' => 'price_xxx',
+    ],
+    'agency' => [
+        'monthly' => 'price_xxx',  // ← Your Agency monthly price ID
+        'yearly' => 'price_xxx',
+    ],
+]);
 
-$action = $_GET['action'] ?? '';
-$db = getDB();
+// CRON SECRET - For scheduled emails (generate random string)
+define('CRON_SECRET_KEY', 'generate_a_random_32_char_string');  // ← CHANGE THIS
 
-try {
-    switch ($action) {
-        case 'list':
-            handleListLogs($db, $user);
-            break;
-            
-        case 'save':
-            handleSaveLog($db, $user);
-            break;
-            
-        case 'update':
-            handleUpdateLog($db, $user);
-            break;
-            
-        case 'delete':
-            handleDeleteLog($db, $user);
-            break;
-            
-        case 'stats':
-            handleCallStats($db, $user);
-            break;
-            
-        default:
-            http_response_code(400);
-            echo json_encode(['success' => false, 'error' => 'Invalid action']);
-    }
-} catch (Exception $e) {
-    http_response_code(500);
-    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
-}
+// JWT SECRET - For token auth (generate random string)
+define('JWT_SECRET', 'another_random_32_char_string');  // ← CHANGE THIS
 
-/**
- * List call logs for the user
- */
-function handleListLogs($db, $user) {
-    if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
-        http_response_code(405);
-        echo json_encode(['success' => false, 'error' => 'Method not allowed']);
-        return;
-    }
+// OPENAI - For AI features (optional)
+define('OPENAI_API_KEY', 'sk-...');  // ← Optional
 
-    $limit = min(100, max(1, intval($_GET['limit'] ?? 50)));
-    $offset = max(0, intval($_GET['offset'] ?? 0));
-    $outcome = $_GET['outcome'] ?? null;
-    
-    $sql = "SELECT * FROM call_logs WHERE user_id = ?";
-    $params = [$user['id']];
-    
-    if ($outcome && in_array($outcome, ['completed', 'no_answer', 'callback_requested', 'interested', 'not_interested', 'wrong_number', 'other'])) {
-        $sql .= " AND outcome = ?";
-        $params[] = $outcome;
-    }
-    
-    $sql .= " ORDER BY created_at DESC LIMIT ? OFFSET ?";
-    $params[] = $limit;
-    $params[] = $offset;
-    
-    $stmt = $db->prepare($sql);
-    $stmt->execute($params);
-    $logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // Parse JSON transcript
-    foreach ($logs as &$log) {
-        if ($log['transcript']) {
-            $log['transcript'] = json_decode($log['transcript'], true);
-        }
-    }
-    
-    // Get total count
-    $countSql = "SELECT COUNT(*) FROM call_logs WHERE user_id = ?";
-    $countParams = [$user['id']];
-    if ($outcome) {
-        $countSql .= " AND outcome = ?";
-        $countParams[] = $outcome;
-    }
-    $countStmt = $db->prepare($countSql);
-    $countStmt->execute($countParams);
-    $total = $countStmt->fetchColumn();
-    
-    echo json_encode([
-        'success' => true,
-        'logs' => $logs,
-        'total' => intval($total),
-        'limit' => $limit,
-        'offset' => $offset
-    ]);
-}
+// GOOGLE DRIVE - For export (optional)
+define('GOOGLE_DRIVE_CLIENT_ID', '');  // ← Optional
+define('GOOGLE_DRIVE_CLIENT_SECRET', '');  // ← Optional
+define('GOOGLE_DRIVE_REDIRECT_URI', 'https://bamlead.com/api/google-drive-callback.php');
 
-/**
- * Save a new call log
- */
-function handleSaveLog($db, $user) {
-    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        http_response_code(405);
-        echo json_encode(['success' => false, 'error' => 'Method not allowed']);
-        return;
-    }
-    
-    $input = json_decode(file_get_contents('php://input'), true);
-    
-    if (!$input) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'Invalid JSON input']);
-        return;
-    }
-    
-    $agentId = $input['agent_id'] ?? '';
-    $duration = intval($input['duration_seconds'] ?? 0);
-    $outcome = $input['outcome'] ?? 'completed';
-    $notes = $input['notes'] ?? null;
-    $transcript = $input['transcript'] ?? null;
-    $leadId = $input['lead_id'] ?? null;
-    $leadName = $input['lead_name'] ?? null;
-    $leadPhone = $input['lead_phone'] ?? null;
-    
-    // Validate outcome
-    $validOutcomes = ['completed', 'no_answer', 'callback_requested', 'interested', 'not_interested', 'wrong_number', 'other'];
-    if (!in_array($outcome, $validOutcomes)) {
-        $outcome = 'completed';
-    }
-    
-    $stmt = $db->prepare("
-        INSERT INTO call_logs (user_id, lead_id, lead_name, lead_phone, agent_id, duration_seconds, outcome, notes, transcript)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ");
-    
-    $stmt->execute([
-        $user['id'],
-        $leadId,
-        $leadName,
-        $leadPhone,
-        $agentId,
-        $duration,
-        $outcome,
-        $notes,
-        $transcript ? json_encode($transcript) : null
-    ]);
-    
-    $logId = $db->lastInsertId();
-    
-    echo json_encode([
-        'success' => true,
-        'log_id' => intval($logId),
-        'message' => 'Call log saved successfully'
-    ]);
-}
+// OTHER SETTINGS
+define('ALLOWED_ORIGINS', [
+    'https://bamlead.com',
+    'https://www.bamlead.com',
+]);
+define('RATE_LIMIT', 30);
+define('CACHE_DURATION', 300);
+define('ENABLE_CACHE', true);
+define('CACHE_DIR', __DIR__ . '/cache');
+define('SESSION_LIFETIME', 604800);
+define('DEBUG_MODE', false);  // Set to true temporarily for debugging
+```
 
-/**
- * Update a call log (outcome, notes)
- */
-function handleUpdateLog($db, $user) {
-    if ($_SERVER['REQUEST_METHOD'] !== 'PUT' && $_SERVER['REQUEST_METHOD'] !== 'POST') {
-        http_response_code(405);
-        echo json_encode(['success' => false, 'error' => 'Method not allowed']);
-        return;
-    }
-    
-    $input = json_decode(file_get_contents('php://input'), true);
-    $logId = intval($input['id'] ?? 0);
-    
-    if (!$logId) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'Log ID required']);
-        return;
-    }
-    
-    // Verify ownership
-    $stmt = $db->prepare("SELECT id FROM call_logs WHERE id = ? AND user_id = ?");
-    $stmt->execute([$logId, $user['id']]);
-    if (!$stmt->fetch()) {
-        http_response_code(404);
-        echo json_encode(['success' => false, 'error' => 'Call log not found']);
-        return;
-    }
-    
-    $updates = [];
-    $params = [];
-    
-    if (isset($input['outcome'])) {
-        $validOutcomes = ['completed', 'no_answer', 'callback_requested', 'interested', 'not_interested', 'wrong_number', 'other'];
-        if (in_array($input['outcome'], $validOutcomes)) {
-            $updates[] = "outcome = ?";
-            $params[] = $input['outcome'];
-        }
-    }
-    
-    if (isset($input['notes'])) {
-        $updates[] = "notes = ?";
-        $params[] = $input['notes'];
-    }
-    
-    if (empty($updates)) {
-        echo json_encode(['success' => true, 'message' => 'No updates provided']);
-        return;
-    }
-    
-    $params[] = $logId;
-    $stmt = $db->prepare("UPDATE call_logs SET " . implode(", ", $updates) . " WHERE id = ?");
-    $stmt->execute($params);
-    
-    echo json_encode(['success' => true, 'message' => 'Call log updated']);
-}
+---
 
-/**
- * Delete a call log
- */
-function handleDeleteLog($db, $user) {
-    if ($_SERVER['REQUEST_METHOD'] !== 'DELETE' && $_SERVER['REQUEST_METHOD'] !== 'POST') {
-        http_response_code(405);
-        echo json_encode(['success' => false, 'error' => 'Method not allowed']);
-        return;
-    }
-    
-    $input = json_decode(file_get_contents('php://input'), true);
-    $logId = intval($input['id'] ?? $_GET['id'] ?? 0);
-    
-    if (!$logId) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'Log ID required']);
-        return;
-    }
-    
-    $stmt = $db->prepare("DELETE FROM call_logs WHERE id = ? AND user_id = ?");
-    $stmt->execute([$logId, $user['id']]);
-    
-    if ($stmt->rowCount() > 0) {
-        echo json_encode(['success' => true, 'message' => 'Call log deleted']);
-    } else {
-        http_response_code(404);
-        echo json_encode(['success' => false, 'error' => 'Call log not found']);
-    }
-}
+## Step 3: Run Database Migrations
 
-/**
- * Get call statistics
- */
-function handleCallStats($db, $user) {
-    if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
-        http_response_code(405);
-        echo json_encode(['success' => false, 'error' => 'Method not allowed']);
-        return;
-    }
-    
-    // Total calls
-    $stmt = $db->prepare("SELECT COUNT(*) FROM call_logs WHERE user_id = ?");
-    $stmt->execute([$user['id']]);
-    $totalCalls = $stmt->fetchColumn();
-    
-    // Total duration
-    $stmt = $db->prepare("SELECT SUM(duration_seconds) FROM call_logs WHERE user_id = ?");
-    $stmt->execute([$user['id']]);
-    $totalDuration = $stmt->fetchColumn() ?? 0;
-    
-    // Outcomes breakdown
-    $stmt = $db->prepare("
-        SELECT outcome, COUNT(*) as count 
-        FROM call_logs 
-        WHERE user_id = ? 
-        GROUP BY outcome
-    ");
-    $stmt->execute([$user['id']]);
-    $outcomes = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
-    
-    // Calls this week
-    $stmt = $db->prepare("
-        SELECT COUNT(*) FROM call_logs 
-        WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-    ");
-    $stmt->execute([$user['id']]);
-    $callsThisWeek = $stmt->fetchColumn();
-    
-    // Average call duration
-    $avgDuration = $totalCalls > 0 ? round($totalDuration / $totalCalls) : 0;
-    
-    echo json_encode([
-        'success' => true,
-        'stats' => [
-            'total_calls' => intval($totalCalls),
-            'total_duration_seconds' => intval($totalDuration),
-            'average_duration_seconds' => $avgDuration,
-            'calls_this_week' => intval($callsThisWeek),
-            'outcomes' => $outcomes,
-            'interested_rate' => $totalCalls > 0 ? round((($outcomes['interested'] ?? 0) / $totalCalls) * 100, 1) : 0
-        ]
-    ]);
-}
+In Hostinger's phpMyAdmin, run these SQL files in order:
+
+1. `database/schema.sql` - Core tables
+2. `database/email_outreach.sql` - Email system
+3. `database/rate_limits.sql` - Rate limiting
+4. `database/subscriptions.sql` - Stripe subscriptions
+5. `database/verification_tokens.sql` - Email verification
+6. `database/verified_leads.sql` - Verified leads
+7. `database/google_drive_tokens.sql` - Google Drive tokens
+
+---
+
+## Step 4: Set Up Cron Job
+
+In Hostinger hPanel → Cron Jobs → Add:
+
+**Command:**
+```
+wget -q -O /dev/null "https://bamlead.com/api/cron-email.php?key=YOUR_CRON_SECRET_KEY"
+```
+
+**Schedule:** Every minute (`* * * * *`)
+
+---
+
+## Step 5: Create Email Account
+
+In Hostinger hPanel → Emails:
+1. Create email: `noreply@bamlead.com`
+2. Set a secure password
+3. Update `SMTP_PASS` in config.php with this password
+
+---
+
+## Step 6: Verify Everything Works
+
+### Quick Tests:
+
+1. **Health Check:**
+   ```
+   https://bamlead.com/api/health.php
+   ```
+   Should return JSON with `status: "ok"`
+
+2. **Full Diagnostics:**
+   ```
+   https://bamlead.com/api/diagnostics.php?key=YOUR_CRON_SECRET_KEY
+   ```
+   Shows status of all systems
+
+3. **In Dashboard:**
+   Go to Dashboard → Backend Diagnostics to run comprehensive tests
+
+---
+
+## Troubleshooting
+
+### "Page Not Found" on API endpoints
+- Files not uploaded to `/public_html/api/`
+- Check `.htaccess` exists in `/api/`
+
+### "Invalid JSON" responses
+- PHP syntax error in `config.php`
+- Check for missing quotes/semicolons
+- Set `DEBUG_MODE` to `true` temporarily
+
+### "Database connection failed"
+- Wrong credentials in `config.php`
+- Verify in Hostinger hPanel → Databases
+
+### "SMTP error"
+- Email account doesn't exist
+- Wrong password in `config.php`
+- Create email in hPanel → Emails
+
+### "Unauthorized" on API calls
+- `includes/auth.php` missing
+- Session not being maintained
+
+---
+
+## API Endpoints Reference
+
+| Endpoint | Purpose |
+|----------|---------|
+| `/api/health.php` | Health check |
+| `/api/diagnostics.php?key=X` | Full system diagnostics |
+| `/api/auth.php` | Login/register/logout |
+| `/api/gmb-search.php` | GMB lead search |
+| `/api/platform-search.php` | Platform scanner |
+| `/api/analyze-leads.php` | AI lead grouping |
+| `/api/email-outreach.php` | Email templates & sending |
+| `/api/cron-email.php?key=X` | Process scheduled emails |
+| `/api/stripe.php` | Stripe checkout/portal |
+| `/api/verified-leads.php` | Saved leads management |
+
+---
+
+## Security Notes
+
+⚠️ **Never commit config.php to Git** - It contains secrets
+
+⚠️ **Set DEBUG_MODE = false** in production
+
+⚠️ **Use HTTPS** for all API calls
+
+⚠️ **Rotate CRON_SECRET_KEY** periodically

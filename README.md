@@ -1,73 +1,162 @@
-# Welcome to your Lovable project
+<?php
+/**
+ * Password Reset & Email Verification API Endpoint
+ */
 
-## Project info
+require_once __DIR__ . '/includes/functions.php';
+require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/email.php';
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+// Handle CORS
+setCorsHeaders();
+handlePreflight();
 
-## How can I edit this code?
+$action = $_GET['action'] ?? '';
 
-There are several ways of editing your application.
+switch ($action) {
+    case 'forgot-password':
+        handleForgotPassword();
+        break;
+    case 'reset-password':
+        handleResetPassword();
+        break;
+    case 'verify-email':
+        handleVerifyEmail();
+        break;
+    case 'resend-verification':
+        handleResendVerification();
+        break;
+    default:
+        sendError('Invalid action', 400);
+}
 
-**Use Lovable**
+/**
+ * Request password reset
+ */
+function handleForgotPassword() {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        sendError('Method not allowed', 405);
+    }
+    
+    $input = getJsonInput();
+    $email = sanitizeInput($input['email'] ?? '', 255);
+    
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        sendError('Invalid email address');
+    }
+    
+    $db = getDB();
+    $user = $db->fetchOne("SELECT id, name, email FROM users WHERE email = ?", [strtolower($email)]);
+    
+    // Always return success to prevent email enumeration
+    if ($user) {
+        sendPasswordResetEmail($user['id'], $user['email'], $user['name']);
+    }
+    
+    sendJson([
+        'success' => true,
+        'message' => 'If an account exists with that email, you will receive a password reset link.'
+    ]);
+}
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+/**
+ * Reset password with token
+ */
+function handleResetPassword() {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        sendError('Method not allowed', 405);
+    }
+    
+    $input = getJsonInput();
+    $token = sanitizeInput($input['token'] ?? '', 64);
+    $password = $input['password'] ?? '';
+    
+    if (!$token) {
+        sendError('Token is required');
+    }
+    
+    if (strlen($password) < 8) {
+        sendError('Password must be at least 8 characters');
+    }
+    
+    // Validate token
+    $tokenData = validateToken($token, 'password_reset');
+    
+    if (!$tokenData) {
+        sendError('Invalid or expired reset link', 400);
+    }
+    
+    $db = getDB();
+    
+    // Update password
+    $db->update(
+        "UPDATE users SET password_hash = ? WHERE id = ?",
+        [hashPassword($password), $tokenData['user_id']]
+    );
+    
+    // Mark token as used
+    markTokenUsed($token);
+    
+    // Clear all sessions for this user (security measure)
+    $db->delete("DELETE FROM sessions WHERE user_id = ?", [$tokenData['user_id']]);
+    
+    sendJson([
+        'success' => true,
+        'message' => 'Password reset successfully. Please sign in with your new password.'
+    ]);
+}
 
-Changes made via Lovable will be committed automatically to this repo.
+/**
+ * Verify email with token
+ */
+function handleVerifyEmail() {
+    $token = sanitizeInput($_GET['token'] ?? '', 64);
+    
+    if (!$token) {
+        sendError('Token is required');
+    }
+    
+    $tokenData = validateToken($token, 'email_verification');
+    
+    if (!$tokenData) {
+        sendError('Invalid or expired verification link', 400);
+    }
+    
+    $db = getDB();
+    
+    // Mark email as verified
+    $db->update(
+        "UPDATE users SET email_verified = TRUE, email_verified_at = NOW() WHERE id = ?",
+        [$tokenData['user_id']]
+    );
+    
+    // Mark token as used
+    markTokenUsed($token);
+    
+    sendJson([
+        'success' => true,
+        'message' => 'Email verified successfully!'
+    ]);
+}
 
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
-```
-
-**Edit a file directly in GitHub**
-
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
-
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+/**
+ * Resend verification email
+ */
+function handleResendVerification() {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        sendError('Method not allowed', 405);
+    }
+    
+    $user = requireAuth();
+    
+    if ($user['email_verified']) {
+        sendError('Email is already verified');
+    }
+    
+    sendVerificationEmail($user['id'], $user['email'], $user['name']);
+    
+    sendJson([
+        'success' => true,
+        'message' => 'Verification email sent!'
+    ]);
+}

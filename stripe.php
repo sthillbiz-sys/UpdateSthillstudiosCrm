@@ -1,246 +1,440 @@
 <?php
 /**
- * Email Helper Functions for BamLead
- * Uses PHPMailer or native mail() function
+ * Shared helper functions for BamLead API
  */
 
 require_once __DIR__ . '/../config.php';
-require_once __DIR__ . '/database.php';
 
 /**
- * Send an email using PHP's mail function or SMTP
- * For production, consider using PHPMailer with SMTP
+ * Set CORS headers for API responses
  */
-function sendEmail($to, $subject, $htmlBody, $textBody = '') {
-    // Check if we should use SMTP (PHPMailer)
-    if (defined('SMTP_HOST') && SMTP_HOST) {
-        return sendEmailSMTP($to, $subject, $htmlBody, $textBody);
+function setCorsHeaders() {
+    $origin = isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : '';
+    
+    // Only allow whitelisted origins - never use wildcard in production
+    if (defined('ALLOWED_ORIGINS') && in_array($origin, ALLOWED_ORIGINS)) {
+        header("Access-Control-Allow-Origin: $origin");
+        header('Access-Control-Allow-Credentials: true');
+    } elseif (defined('DEBUG_MODE') && DEBUG_MODE) {
+        // In dev mode, allow localhost origins
+        if (preg_match('/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/', $origin)) {
+            header("Access-Control-Allow-Origin: $origin");
+            header('Access-Control-Allow-Credentials: true');
+        }
     }
+    // If origin not allowed, don't set CORS header - browser will block
     
-    // Fallback to native mail()
-    $headers = [
-        'MIME-Version: 1.0',
-        'Content-type: text/html; charset=UTF-8',
-        'From: ' . MAIL_FROM_NAME . ' <' . MAIL_FROM_ADDRESS . '>',
-        'Reply-To: ' . MAIL_FROM_ADDRESS,
-        'X-Mailer: PHP/' . phpversion()
-    ];
+    header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
+    header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
+    header('Access-Control-Max-Age: 86400');
     
-    $headerString = implode("\r\n", $headers);
+    // Security headers
+    header('X-Content-Type-Options: nosniff');
+    header('X-Frame-Options: DENY');
+    header('X-XSS-Protection: 1; mode=block');
+    header('Referrer-Policy: strict-origin-when-cross-origin');
     
-    return mail($to, $subject, $htmlBody, $headerString);
+    // CSP for API responses (JSON)
+    header("Content-Security-Policy: default-src 'none'; frame-ancestors 'none'");
 }
 
 /**
- * Send email via SMTP (requires PHPMailer)
- * Install: composer require phpmailer/phpmailer
+ * Handle preflight OPTIONS request
  */
-function sendEmailSMTP($to, $subject, $htmlBody, $textBody = '') {
-    // If PHPMailer is not installed, fall back to native mail
-    if (!class_exists('PHPMailer\PHPMailer\PHPMailer')) {
-        return mail($to, $subject, $htmlBody);
+function handlePreflight() {
+    if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+        http_response_code(200);
+        exit();
+    }
+}
+
+/**
+ * Send JSON response
+ */
+function sendJson($data, $statusCode = 200) {
+    http_response_code($statusCode);
+    header('Content-Type: application/json');
+    echo json_encode($data);
+    exit();
+}
+
+/**
+ * Send error response
+ */
+function sendError($message, $statusCode = 400) {
+    sendJson(['success' => false, 'error' => $message], $statusCode);
+}
+
+/**
+ * Get JSON input from request body
+ */
+function getJsonInput() {
+    $input = json_decode(file_get_contents('php://input'), true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        return null;
+    }
+    return $input;
+}
+
+/**
+ * Sanitize string input
+ */
+function sanitizeInput($input, $maxLength = 100) {
+    if (!is_string($input)) {
+        return '';
+    }
+    $input = trim($input);
+    $input = htmlspecialchars($input, ENT_QUOTES, 'UTF-8');
+    if (strlen($input) > $maxLength) {
+        $input = substr($input, 0, $maxLength);
+    }
+    return $input;
+}
+
+/**
+ * Make a cURL request
+ */
+function curlRequest($url, $options = []) {
+    $ch = curl_init();
+    
+    $defaultOptions = [
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_USERAGENT => 'BamLead/1.0 (Website Analyzer)',
+    ];
+    
+    curl_setopt_array($ch, $defaultOptions + $options);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
+    
+    curl_close($ch);
+    
+    return [
+        'response' => $response,
+        'httpCode' => $httpCode,
+        'error' => $error
+    ];
+}
+
+/**
+ * Get cached result if available
+ */
+function getCache($key) {
+    if (!defined('ENABLE_CACHE') || !ENABLE_CACHE) {
+        return null;
     }
     
-    $mail = new \PHPMailer\PHPMailer\PHPMailer(true);
+    // Validate cache key to prevent directory traversal
+    if (!preg_match('/^[a-zA-Z0-9_\-]+$/', $key)) {
+        return null;
+    }
     
-    try {
-        $mail->isSMTP();
-        $mail->Host = SMTP_HOST;
-        $mail->SMTPAuth = true;
-        $mail->Username = SMTP_USER;
-        $mail->Password = SMTP_PASS;
-        $mail->SMTPSecure = SMTP_SECURE;
-        $mail->Port = SMTP_PORT;
-        
-        $mail->setFrom(MAIL_FROM_ADDRESS, MAIL_FROM_NAME);
-        $mail->addAddress($to);
-        
-        $mail->isHTML(true);
-        $mail->Subject = $subject;
-        $mail->Body = $htmlBody;
-        $mail->AltBody = $textBody ?: strip_tags($htmlBody);
-        
-        $mail->send();
-        return true;
-    } catch (Exception $e) {
-        error_log("Email error: " . $mail->ErrorInfo);
+    $cacheFile = CACHE_DIR . '/' . md5($key) . '.cache';
+    
+    if (!file_exists($cacheFile)) {
+        return null;
+    }
+    
+    // Use JSON instead of unserialize to prevent object injection
+    $contents = file_get_contents($cacheFile);
+    $data = json_decode($contents, true);
+    
+    if (!$data || !isset($data['expires']) || $data['expires'] < time()) {
+        @unlink($cacheFile);
+        return null;
+    }
+    
+    return $data['value'];
+}
+
+/**
+ * Set cache value
+ */
+function setCache($key, $value, $ttl = null) {
+    if (!defined('ENABLE_CACHE') || !ENABLE_CACHE) {
         return false;
     }
-}
-
-/**
- * Generate a verification token
- */
-function generateVerificationToken($userId, $type, $expiresInHours = 24) {
-    $db = getDB();
     
-    // Delete any existing tokens of this type for this user
-    $db->delete(
-        "DELETE FROM verification_tokens WHERE user_id = ? AND type = ?",
-        [$userId, $type]
-    );
-    
-    // Generate new token
-    $token = bin2hex(random_bytes(32));
-    $expiresAt = date('Y-m-d H:i:s', strtotime("+{$expiresInHours} hours"));
-    
-    $db->insert(
-        "INSERT INTO verification_tokens (user_id, token, type, expires_at) VALUES (?, ?, ?, ?)",
-        [$userId, $token, $type, $expiresAt]
-    );
-    
-    return $token;
-}
-
-/**
- * Validate a verification token
- */
-function validateToken($token, $type) {
-    $db = getDB();
-    
-    $result = $db->fetchOne(
-        "SELECT vt.*, u.email, u.name FROM verification_tokens vt 
-         JOIN users u ON vt.user_id = u.id
-         WHERE vt.token = ? AND vt.type = ? AND vt.expires_at > NOW() AND vt.used_at IS NULL",
-        [$token, $type]
-    );
-    
-    return $result;
-}
-
-/**
- * Mark a token as used
- */
-function markTokenUsed($token) {
-    $db = getDB();
-    return $db->update(
-        "UPDATE verification_tokens SET used_at = NOW() WHERE token = ?",
-        [$token]
-    );
-}
-
-/**
- * Send verification email
- */
-function sendVerificationEmail($userId, $email, $name) {
-    $token = generateVerificationToken($userId, 'email_verification', 24);
-    $verifyUrl = FRONTEND_URL . '/verify-email?token=' . $token;
-    
-    $subject = 'Verify your BamLead account';
-    $html = getEmailTemplate('verify_email', [
-        'name' => $name ?: 'there',
-        'verify_url' => $verifyUrl,
-        'expires' => '24 hours'
-    ]);
-    
-    return sendEmail($email, $subject, $html);
-}
-
-/**
- * Send password reset email
- */
-function sendPasswordResetEmail($userId, $email, $name) {
-    $token = generateVerificationToken($userId, 'password_reset', 1);
-    $resetUrl = FRONTEND_URL . '/reset-password?token=' . $token;
-    
-    $subject = 'Reset your BamLead password';
-    $html = getEmailTemplate('reset_password', [
-        'name' => $name ?: 'there',
-        'reset_url' => $resetUrl,
-        'expires' => '1 hour'
-    ]);
-    
-    return sendEmail($email, $subject, $html);
-}
-
-/**
- * Get email template
- */
-function getEmailTemplate($template, $vars = []) {
-    $templates = [
-        'verify_email' => '
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <style>
-                    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; color: #333; }
-                    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-                    .header { text-align: center; padding: 20px 0; }
-                    .logo { font-size: 28px; font-weight: bold; color: #14b8a6; }
-                    .content { background: #f8fafc; border-radius: 8px; padding: 30px; margin: 20px 0; }
-                    .button { display: inline-block; background: #14b8a6; color: white; padding: 12px 30px; border-radius: 6px; text-decoration: none; font-weight: 600; }
-                    .footer { text-align: center; color: #64748b; font-size: 14px; margin-top: 20px; }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <div class="logo">BamLead</div>
-                    </div>
-                    <div class="content">
-                        <h2>Verify your email address</h2>
-                        <p>Hi {{name}},</p>
-                        <p>Thanks for signing up! Please verify your email address by clicking the button below:</p>
-                        <p style="text-align: center; margin: 30px 0;">
-                            <a href="{{verify_url}}" class="button">Verify Email</a>
-                        </p>
-                        <p>This link will expire in {{expires}}.</p>
-                        <p>If you didn\'t create an account, you can safely ignore this email.</p>
-                    </div>
-                    <div class="footer">
-                        <p>&copy; ' . date('Y') . ' BamLead. All rights reserved.</p>
-                    </div>
-                </div>
-            </body>
-            </html>
-        ',
-        'reset_password' => '
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <style>
-                    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; color: #333; }
-                    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-                    .header { text-align: center; padding: 20px 0; }
-                    .logo { font-size: 28px; font-weight: bold; color: #14b8a6; }
-                    .content { background: #f8fafc; border-radius: 8px; padding: 30px; margin: 20px 0; }
-                    .button { display: inline-block; background: #14b8a6; color: white; padding: 12px 30px; border-radius: 6px; text-decoration: none; font-weight: 600; }
-                    .footer { text-align: center; color: #64748b; font-size: 14px; margin-top: 20px; }
-                    .warning { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px; margin: 20px 0; }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <div class="logo">BamLead</div>
-                    </div>
-                    <div class="content">
-                        <h2>Reset your password</h2>
-                        <p>Hi {{name}},</p>
-                        <p>We received a request to reset your password. Click the button below to choose a new password:</p>
-                        <p style="text-align: center; margin: 30px 0;">
-                            <a href="{{reset_url}}" class="button">Reset Password</a>
-                        </p>
-                        <p>This link will expire in {{expires}}.</p>
-                        <div class="warning">
-                            <strong>Didn\'t request this?</strong><br>
-                            If you didn\'t request a password reset, please ignore this email or contact support if you have concerns.
-                        </div>
-                    </div>
-                    <div class="footer">
-                        <p>&copy; ' . date('Y') . ' BamLead. All rights reserved.</p>
-                    </div>
-                </div>
-            </body>
-            </html>
-        '
-    ];
-    
-    $html = $templates[$template] ?? '';
-    
-    foreach ($vars as $key => $value) {
-        $html = str_replace('{{' . $key . '}}', htmlspecialchars($value), $html);
+    // Validate cache key
+    if (!preg_match('/^[a-zA-Z0-9_\-]+$/', $key)) {
+        return false;
     }
     
-    return $html;
+    if (!is_dir(CACHE_DIR)) {
+        @mkdir(CACHE_DIR, 0755, true);
+    }
+    
+    $ttl = $ttl ?? CACHE_DURATION;
+    $cacheFile = CACHE_DIR . '/' . md5($key) . '.cache';
+    
+    $data = [
+        'expires' => time() + $ttl,
+        'value' => $value
+    ];
+    
+    // Use JSON instead of serialize for security
+    return file_put_contents($cacheFile, json_encode($data)) !== false;
+}
+
+/**
+ * Detect website platform from HTML
+ */
+function detectPlatform($html) {
+    $html = strtolower($html);
+    
+    $platforms = [
+        'WordPress' => ['wp-content', 'wordpress', 'wp-includes'],
+        'Wix' => ['wix.com', 'wixsite.com', 'static.wixstatic.com'],
+        'Squarespace' => ['squarespace', 'sqsp.net', 'static1.squarespace.com'],
+        'Shopify' => ['shopify', 'cdn.shopify.com', 'myshopify.com'],
+        'Webflow' => ['webflow', 'assets.website-files.com'],
+        'GoDaddy' => ['godaddy', 'secureserver.net', 'godaddysites.com'],
+        'Weebly' => ['weebly', 'weeblycloud.com'],
+        'Joomla' => ['joomla', '/components/com_', '/modules/mod_'],
+        'Drupal' => ['drupal', '/sites/default/files', 'drupal.settings'],
+        'Magento' => ['magento', 'mage/', 'varien'],
+        'PrestaShop' => ['prestashop', '/themes/default/', 'presta'],
+        'OpenCart' => ['opencart', '/catalog/view/', 'route='],
+        'Zen Cart' => ['zen cart', 'zen-cart', 'zencart'],
+        'osCommerce' => ['oscommerce', 'osc_session'],
+        'Jimdo' => ['jimdo', 'jimdofree', 'jimcdn.com'],
+        'Web.com' => ['web.com', 'website-builder'],
+        'BigCommerce' => ['bigcommerce', 'bigcommercecdn'],
+        'Duda' => ['duda', 'dudaone', 'duda.co'],
+        'HubSpot' => ['hubspot', 'hs-scripts', 'hscta'],
+    ];
+    
+    foreach ($platforms as $name => $indicators) {
+        foreach ($indicators as $indicator) {
+            if (strpos($html, $indicator) !== false) {
+                return $name;
+            }
+        }
+    }
+    
+    // Check for basic indicators
+    if (strpos($html, '<!doctype html>') !== false || strpos($html, '<!DOCTYPE html>') !== false) {
+        // Check for any CMS indicators
+        if (preg_match('/content="[^"]*generator[^"]*"/i', $html)) {
+            return 'Custom CMS';
+        }
+    }
+    
+    // Check for very old sites
+    if (strpos($html, '<table') !== false && strpos($html, 'width=') !== false) {
+        return 'Custom HTML (Legacy)';
+    }
+    
+    if (strpos($html, '.php') !== false) {
+        return 'Custom PHP';
+    }
+    
+    return 'Custom/Unknown';
+}
+
+/**
+ * Detect website issues
+ */
+function detectIssues($html) {
+    $issues = [];
+    $htmlLower = strtolower($html);
+    
+    // Mobile responsiveness
+    if (strpos($htmlLower, 'viewport') === false) {
+        $issues[] = 'Not mobile responsive';
+    }
+    
+    // Page size
+    $pageSize = strlen($html);
+    if ($pageSize > 500000) {
+        $issues[] = 'Large page size (slow loading)';
+    }
+    
+    // HTML5 doctype
+    if (strpos($htmlLower, '<!doctype html>') === false) {
+        $issues[] = 'Outdated HTML structure';
+    }
+    
+    // Meta description
+    if (strpos($htmlLower, 'meta name="description"') === false && 
+        strpos($htmlLower, "meta name='description'") === false) {
+        $issues[] = 'Missing meta description';
+    }
+    
+    // Title tag
+    if (strpos($htmlLower, '<title>') === false || strpos($htmlLower, '<title></title>') !== false) {
+        $issues[] = 'Missing or empty title tag';
+    }
+    
+    // Old jQuery
+    if (preg_match('/jquery[.-]?1\.[0-9]/', $htmlLower) || 
+        preg_match('/jquery[.-]?2\.[0-2]/', $htmlLower)) {
+        $issues[] = 'Outdated jQuery version';
+    }
+    
+    // Flash content
+    if (strpos($htmlLower, 'swfobject') !== false || strpos($htmlLower, '.swf') !== false) {
+        $issues[] = 'Uses Flash (deprecated)';
+    }
+    
+    // Missing alt tags
+    if (preg_match('/<img[^>]+(?!alt)[^>]*>/i', $html)) {
+        $issues[] = 'Missing alt tags on images';
+    }
+    
+    // Inline styles (indicator of old practices)
+    $inlineStyleCount = substr_count($htmlLower, 'style="');
+    if ($inlineStyleCount > 20) {
+        $issues[] = 'Excessive inline styles';
+    }
+    
+    // Tables for layout
+    $tableCount = substr_count($htmlLower, '<table');
+    if ($tableCount > 5 && strpos($htmlLower, 'width=') !== false) {
+        $issues[] = 'Tables used for layout';
+    }
+    
+    // HTTP resources on HTTPS
+    if (preg_match('/src=["\']http:\/\//i', $html)) {
+        $issues[] = 'Mixed content (HTTP on HTTPS)';
+    }
+    
+    // Missing Open Graph tags
+    if (strpos($htmlLower, 'og:') === false) {
+        $issues[] = 'Missing social media meta tags';
+    }
+    
+    // Missing favicon
+    if (strpos($htmlLower, 'favicon') === false && strpos($htmlLower, 'icon') === false) {
+        $issues[] = 'Missing favicon';
+    }
+    
+    return $issues;
+}
+
+/**
+ * Analyze a website and return analysis data
+ */
+function analyzeWebsite($url) {
+    if (empty($url)) {
+        return [
+            'hasWebsite' => false,
+            'platform' => null,
+            'needsUpgrade' => true,
+            'issues' => ['No website found'],
+            'mobileScore' => null,
+            'loadTime' => null
+        ];
+    }
+    
+    // Ensure URL has protocol
+    if (!preg_match('/^https?:\/\//', $url)) {
+        $url = 'https://' . $url;
+    }
+    
+    $startTime = microtime(true);
+    
+    $result = curlRequest($url, [
+        CURLOPT_TIMEOUT => WEBSITE_TIMEOUT,
+        CURLOPT_SSL_VERIFYPEER => false,
+    ]);
+    
+    $loadTime = round((microtime(true) - $startTime) * 1000); // ms
+    
+    $analysis = [
+        'hasWebsite' => $result['httpCode'] === 200,
+        'platform' => null,
+        'needsUpgrade' => false,
+        'issues' => [],
+        'mobileScore' => null,
+        'loadTime' => $loadTime
+    ];
+    
+    if ($result['httpCode'] !== 200 || empty($result['response'])) {
+        $analysis['hasWebsite'] = false;
+        $analysis['needsUpgrade'] = true;
+        $analysis['issues'][] = 'Website not accessible';
+        return $analysis;
+    }
+    
+    $html = $result['response'];
+    
+    // Detect platform
+    $analysis['platform'] = detectPlatform($html);
+    
+    // Detect issues
+    $analysis['issues'] = detectIssues($html);
+    
+    // Calculate mobile score (simplified)
+    $mobileScore = 100;
+    if (strpos(strtolower($html), 'viewport') === false) {
+        $mobileScore -= 40;
+    }
+    if (strlen($html) > 300000) {
+        $mobileScore -= 20;
+    }
+    if ($loadTime > 3000) {
+        $mobileScore -= 20;
+    }
+    foreach ($analysis['issues'] as $issue) {
+        $mobileScore -= 5;
+    }
+    $analysis['mobileScore'] = max(0, min(100, $mobileScore));
+    
+    // Determine if needs upgrade
+    $lowPriorityPlatforms = ['WordPress', 'Wix', 'Weebly', 'GoDaddy', 'Joomla', 'Drupal'];
+    $analysis['needsUpgrade'] = 
+        count($analysis['issues']) >= 2 ||
+        in_array($analysis['platform'], $lowPriorityPlatforms) ||
+        $analysis['mobileScore'] < 60 ||
+        $loadTime > 4000;
+    
+    return $analysis;
+}
+
+/**
+ * Extract phone numbers from text
+ */
+function extractPhoneNumbers($text) {
+    $phones = [];
+    
+    // US phone patterns
+    $patterns = [
+        '/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/',
+        '/\d{3}[-.\s]\d{3}[-.\s]\d{4}/',
+        '/1[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}/',
+    ];
+    
+    foreach ($patterns as $pattern) {
+        if (preg_match_all($pattern, $text, $matches)) {
+            $phones = array_merge($phones, $matches[0]);
+        }
+    }
+    
+    return array_unique($phones);
+}
+
+/**
+ * Extract email addresses from text
+ */
+function extractEmails($text) {
+    $emails = [];
+    
+    if (preg_match_all('/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/', $text, $matches)) {
+        $emails = array_unique($matches[0]);
+    }
+    
+    return $emails;
+}
+
+/**
+ * Generate a unique ID
+ */
+function generateId($prefix = '') {
+    return $prefix . uniqid() . '_' . bin2hex(random_bytes(4));
 }

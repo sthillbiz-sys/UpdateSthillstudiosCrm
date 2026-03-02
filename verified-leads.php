@@ -1,324 +1,243 @@
 <?php
 /**
- * Platform Search API Endpoint
- * Searches Google & Bing for businesses using specific website platforms
+ * Stripe API Endpoints
+ * Handles checkout, portal, and subscription management
  */
 
-require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/functions.php';
 require_once __DIR__ . '/includes/auth.php';
-require_once __DIR__ . '/includes/ratelimit.php';
+require_once __DIR__ . '/includes/stripe.php';
 
-header('Content-Type: application/json');
+// Handle CORS
 setCorsHeaders();
 handlePreflight();
 
-// Only allow POST
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    sendError('Method not allowed', 405);
+$action = $_GET['action'] ?? '';
+
+switch ($action) {
+    case 'create-checkout':
+        handleCreateCheckout();
+        break;
+    case 'create-portal':
+        handleCreatePortal();
+        break;
+    case 'subscription':
+        handleGetSubscription();
+        break;
+    case 'cancel':
+        handleCancelSubscription();
+        break;
+    case 'resume':
+        handleResumeSubscription();
+        break;
+    case 'history':
+        handleGetPaymentHistory();
+        break;
+    case 'config':
+        handleGetConfig();
+        break;
+    default:
+        sendError('Invalid action', 400);
 }
 
-// Require authentication and enforce rate limit
-$user = requireAuth();
-enforceRateLimit($user, 'search');
-
-// Get and validate input
-$input = getJsonInput();
-if (!$input) {
-    sendError('Invalid JSON input');
-}
-
-$service = sanitizeInput($input['service'] ?? '');
-$location = sanitizeInput($input['location'] ?? '');
-$platforms = isset($input['platforms']) && is_array($input['platforms']) ? $input['platforms'] : [];
-
-if (empty($service)) {
-    sendError('Service type is required');
-}
-
-if (empty($location)) {
-    sendError('Location is required');
-}
-
-if (empty($platforms)) {
-    sendError('At least one platform must be selected');
-}
-
-// Sanitize platforms
-$platforms = array_map(function($p) {
-    return sanitizeInput($p, 50);
-}, array_slice($platforms, 0, 20));
-
-try {
-    $cacheKey = "platform_search_{$service}_{$location}_" . implode(',', $platforms);
-    
-    // Check cache
-    $cached = getCache($cacheKey);
-    if ($cached !== null) {
-        sendJson([
-            'success' => true,
-            'data' => $cached,
-            'query' => [
-                'service' => $service,
-                'location' => $location,
-                'platforms' => $platforms
-            ],
-            'cached' => true
-        ]);
+/**
+ * Create checkout session for subscription
+ */
+function handleCreateCheckout() {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        sendError('Method not allowed', 405);
     }
     
-    $results = searchPlatforms($service, $location, $platforms);
+    $user = requireAuth();
+    $input = getJsonInput();
     
-    // Cache results
-    setCache($cacheKey, $results);
+    $plan = sanitizeInput($input['plan'] ?? '', 20);
+    $billingPeriod = sanitizeInput($input['billing_period'] ?? 'monthly', 10);
+    
+    if (!in_array($plan, ['basic', 'pro', 'agency'])) {
+        sendError('Invalid plan');
+    }
+    
+    if (!in_array($billingPeriod, ['monthly', 'yearly'])) {
+        sendError('Invalid billing period');
+    }
+    
+    // Check if user is owner or has free account
+    if ($user['is_owner'] || $user['subscription_plan'] === 'free_granted') {
+        sendError('You already have unlimited access');
+    }
+    
+    try {
+        $session = createCheckoutSession($user, $plan, $billingPeriod);
+        
+        sendJson([
+            'success' => true,
+            'checkout_url' => $session->url,
+            'session_id' => $session->id
+        ]);
+    } catch (Exception $e) {
+        sendError($e->getMessage(), 500);
+    }
+}
+
+/**
+ * Create customer portal session
+ */
+function handleCreatePortal() {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        sendError('Method not allowed', 405);
+    }
+    
+    $user = requireAuth();
+    
+    try {
+        $session = createPortalSession($user);
+        
+        sendJson([
+            'success' => true,
+            'portal_url' => $session->url
+        ]);
+    } catch (Exception $e) {
+        sendError($e->getMessage(), 500);
+    }
+}
+
+/**
+ * Get current subscription details
+ */
+function handleGetSubscription() {
+    $user = requireAuth();
+    
+    $subscription = getUserSubscription($user['id']);
     
     sendJson([
         'success' => true,
-        'data' => $results,
-        'query' => [
-            'service' => $service,
-            'location' => $location,
-            'platforms' => $platforms
-        ]
+        'subscription' => $subscription ? [
+            'plan' => $subscription['plan_name'],
+            'status' => $subscription['status'],
+            'current_period_end' => $subscription['current_period_end'],
+            'cancel_at_period_end' => (bool)$subscription['cancel_at_period_end'],
+        ] : null,
+        'is_owner' => (bool)$user['is_owner'],
+        'is_free_account' => $user['subscription_plan'] === 'free_granted',
     ]);
-} catch (Exception $e) {
-    if (DEBUG_MODE) {
-        sendError($e->getMessage(), 500);
-    } else {
-        sendError('An error occurred while searching', 500);
-    }
 }
 
 /**
- * Search for businesses using specific platforms
+ * Cancel subscription
  */
-function searchPlatforms($service, $location, $platforms) {
-    // Build platform query modifiers
-    $platformQueries = buildPlatformQueries($platforms);
-    
-    $allResults = [];
-    
-    // Search Google if API key is available
-    if (!empty(GOOGLE_API_KEY) && !empty(GOOGLE_SEARCH_ENGINE_ID)) {
-        $googleResults = searchGoogle($service, $location, $platformQueries);
-        $allResults = array_merge($allResults, $googleResults);
+function handleCancelSubscription() {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        sendError('Method not allowed', 405);
     }
     
-    // Search Bing if API key is available
-    if (!empty(BING_API_KEY)) {
-        $bingResults = searchBing($service, $location, $platformQueries);
-        $allResults = array_merge($allResults, $bingResults);
-    }
+    $user = requireAuth();
+    $input = getJsonInput();
+    $immediately = (bool)($input['immediately'] ?? false);
     
-    // If no APIs configured, return mock data
-    if (empty($allResults)) {
-        return getMockPlatformResults($service, $location, $platforms);
-    }
-    
-    // Deduplicate by URL
-    $unique = [];
-    $seen = [];
-    foreach ($allResults as $result) {
-        $domain = parse_url($result['url'], PHP_URL_HOST);
-        if ($domain && !isset($seen[$domain])) {
-            $seen[$domain] = true;
-            $unique[] = $result;
-        }
-    }
-    
-    // Analyze websites
-    return array_map(function($result) {
-        $result['websiteAnalysis'] = analyzeWebsite($result['url']);
-        return $result;
-    }, array_slice($unique, 0, RESULTS_PER_PAGE));
-}
-
-/**
- * Build search query modifiers for platforms
- */
-function buildPlatformQueries($platforms) {
-    $modifiers = [];
-    
-    $platformIndicators = [
-        'wordpress' => 'site:*.wordpress.com OR "powered by wordpress" OR "wp-content"',
-        'wix' => 'site:*.wix.com OR site:*.wixsite.com OR "built with wix"',
-        'weebly' => 'site:*.weebly.com OR "powered by weebly"',
-        'godaddy' => '"godaddy website" OR site:*.godaddysites.com',
-        'squarespace' => 'site:*.squarespace.com OR "powered by squarespace"',
-        'joomla' => '"powered by joomla" OR "joomla!"',
-        'drupal' => '"powered by drupal"',
-        'webcom' => 'site:*.web.com',
-        'jimdo' => 'site:*.jimdofree.com OR site:*.jimdo.com',
-        'opencart' => '"powered by opencart"',
-        'prestashop' => '"powered by prestashop"',
-        'magento' => '"powered by magento"',
-        'zencart' => '"powered by zen cart"',
-        'oscommerce' => '"powered by oscommerce"',
-        'customhtml' => 'inurl:".html" OR inurl:".htm"',
-        'customphp' => 'inurl:".php"',
-    ];
-    
-    foreach ($platforms as $platform) {
-        $key = strtolower($platform);
-        if (isset($platformIndicators[$key])) {
-            $modifiers[] = $platformIndicators[$key];
-        }
-    }
-    
-    return $modifiers;
-}
-
-/**
- * Search Google Custom Search API
- */
-function searchGoogle($service, $location, $platformQueries) {
-    $results = [];
-    
-    // Build query
-    $baseQuery = "$service $location";
-    if (!empty($platformQueries)) {
-        $baseQuery .= ' (' . implode(' OR ', array_slice($platformQueries, 0, 3)) . ')';
-    }
-    
-    $query = urlencode($baseQuery);
-    $url = "https://www.googleapis.com/customsearch/v1?" . http_build_query([
-        'key' => GOOGLE_API_KEY,
-        'cx' => GOOGLE_SEARCH_ENGINE_ID,
-        'q' => $baseQuery,
-        'num' => RESULTS_PER_PAGE
-    ]);
-    
-    $response = curlRequest($url);
-    
-    if ($response['httpCode'] !== 200) {
-        if (DEBUG_MODE) {
-            throw new Exception('Google API error: ' . $response['httpCode']);
-        }
-        return $results;
-    }
-    
-    $data = json_decode($response['response'], true);
-    
-    if (!isset($data['items'])) {
-        return $results;
-    }
-    
-    foreach ($data['items'] as $item) {
-        $results[] = [
-            'id' => generateId('goog_'),
-            'name' => $item['title'] ?? 'Unknown Business',
-            'url' => $item['link'] ?? '',
-            'snippet' => $item['snippet'] ?? '',
-            'displayLink' => $item['displayLink'] ?? '',
-            'source' => 'google'
-        ];
-    }
-    
-    return $results;
-}
-
-/**
- * Search Bing Web Search API
- */
-function searchBing($service, $location, $platformQueries) {
-    $results = [];
-    
-    // Build query
-    $baseQuery = "$service $location";
-    if (!empty($platformQueries)) {
-        $baseQuery .= ' (' . implode(' OR ', array_slice($platformQueries, 0, 3)) . ')';
-    }
-    
-    $url = "https://api.bing.microsoft.com/v7.0/search?" . http_build_query([
-        'q' => $baseQuery,
-        'count' => RESULTS_PER_PAGE,
-        'responseFilter' => 'Webpages'
-    ]);
-    
-    $response = curlRequest($url, [
-        CURLOPT_HTTPHEADER => [
-            'Ocp-Apim-Subscription-Key: ' . BING_API_KEY
-        ]
-    ]);
-    
-    if ($response['httpCode'] !== 200) {
-        if (DEBUG_MODE) {
-            throw new Exception('Bing API error: ' . $response['httpCode']);
-        }
-        return $results;
-    }
-    
-    $data = json_decode($response['response'], true);
-    
-    if (!isset($data['webPages']['value'])) {
-        return $results;
-    }
-    
-    foreach ($data['webPages']['value'] as $item) {
-        $results[] = [
-            'id' => generateId('bing_'),
-            'name' => $item['name'] ?? 'Unknown Business',
-            'url' => $item['url'] ?? '',
-            'snippet' => $item['snippet'] ?? '',
-            'displayLink' => parse_url($item['url'] ?? '', PHP_URL_HOST) ?: '',
-            'source' => 'bing'
-        ];
-    }
-    
-    return $results;
-}
-
-/**
- * Get mock results for testing
- */
-function getMockPlatformResults($service, $location, $platforms) {
-    $businesses = [
-        ['name' => "{$location} {$service} Experts", 'platform' => 'WordPress'],
-        ['name' => "Best {$service} Co", 'platform' => 'Wix'],
-        ['name' => "Pro {$service} Services", 'platform' => 'Weebly'],
-        ['name' => "{$service} Masters LLC", 'platform' => 'GoDaddy'],
-        ['name' => "Elite {$service} Group", 'platform' => 'Joomla'],
-        ['name' => "Quality {$service} Inc", 'platform' => 'Custom PHP'],
-        ['name' => "Premier {$service} Solutions", 'platform' => 'Squarespace'],
-        ['name' => "{$location} {$service} Pros", 'platform' => 'WordPress'],
-    ];
-    
-    $issues = [
-        'Not mobile responsive',
-        'Missing meta description',
-        'Outdated jQuery version',
-        'Large page size',
-        'Missing alt tags',
-        'Tables used for layout',
-        'Missing favicon',
-    ];
-    
-    $results = [];
-    
-    foreach ($businesses as $index => $biz) {
-        $domain = strtolower(str_replace(' ', '', $biz['name'])) . '.com';
-        $issueCount = rand(0, 4);
-        $selectedIssues = array_slice($issues, 0, $issueCount);
+    try {
+        cancelSubscription($user['id'], $immediately);
         
-        $results[] = [
-            'id' => generateId('mock_'),
-            'name' => $biz['name'],
-            'url' => "https://{$domain}",
-            'snippet' => "Professional {$service} services in {$location}. Quality work, competitive prices.",
-            'displayLink' => $domain,
-            'source' => 'mock',
-            'phone' => sprintf('(%03d) %03d-%04d', rand(200, 999), rand(100, 999), rand(1000, 9999)),
-            'address' => sprintf('%d Main St, %s', rand(100, 9999), $location),
-            'websiteAnalysis' => [
-                'hasWebsite' => true,
-                'platform' => $biz['platform'],
-                'needsUpgrade' => $issueCount >= 2 || in_array($biz['platform'], ['WordPress', 'Wix', 'Weebly']),
-                'issues' => $selectedIssues,
-                'mobileScore' => rand(35, 95),
-                'loadTime' => rand(800, 4500)
-            ]
-        ];
+        sendJson([
+            'success' => true,
+            'message' => $immediately 
+                ? 'Subscription canceled immediately'
+                : 'Subscription will be canceled at the end of the billing period'
+        ]);
+    } catch (Exception $e) {
+        sendError($e->getMessage(), 500);
+    }
+}
+
+/**
+ * Resume canceled subscription
+ */
+function handleResumeSubscription() {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        sendError('Method not allowed', 405);
     }
     
-    return $results;
+    $user = requireAuth();
+    
+    try {
+        resumeSubscription($user['id']);
+        
+        sendJson([
+            'success' => true,
+            'message' => 'Subscription resumed'
+        ]);
+    } catch (Exception $e) {
+        sendError($e->getMessage(), 500);
+    }
+}
+
+/**
+ * Get payment history
+ */
+function handleGetPaymentHistory() {
+    $user = requireAuth();
+    
+    $history = getPaymentHistory($user['id']);
+    
+    sendJson([
+        'success' => true,
+        'payments' => array_map(function($payment) {
+            return [
+                'id' => $payment['id'],
+                'amount' => $payment['amount'] / 100, // Convert from cents
+                'currency' => strtoupper($payment['currency']),
+                'status' => $payment['status'],
+                'description' => $payment['description'],
+                'date' => $payment['created_at'],
+            ];
+        }, $history)
+    ]);
+}
+
+/**
+ * Get public Stripe config
+ */
+function handleGetConfig() {
+    sendJson([
+        'success' => true,
+        'publishable_key' => STRIPE_PUBLISHABLE_KEY,
+        'plans' => [
+            'basic' => [
+                'name' => 'Basic',
+                'monthly_price' => 49,
+                'yearly_price' => 470,
+                'features' => [
+                    '50 searches per day',
+                    'Basic lead verification',
+                    'CSV export',
+                    'Email support',
+                ],
+            ],
+            'pro' => [
+                'name' => 'Pro',
+                'monthly_price' => 99,
+                'yearly_price' => 950,
+                'features' => [
+                    '200 searches per day',
+                    'Advanced lead verification',
+                    'CRM integrations',
+                    'Priority support',
+                    'Team collaboration (3 users)',
+                ],
+            ],
+            'agency' => [
+                'name' => 'Agency',
+                'monthly_price' => 249,
+                'yearly_price' => 2390,
+                'features' => [
+                    'Unlimited searches',
+                    'Full lead verification',
+                    'White-label exports',
+                    'API access',
+                    'Dedicated account manager',
+                    'Unlimited team members',
+                ],
+            ],
+        ],
+    ]);
 }

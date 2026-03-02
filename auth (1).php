@@ -1,183 +1,416 @@
 <?php
 /**
- * Google Drive Export Endpoint
- * Exports verified leads to user's Google Drive
+ * AI Lead Analysis & Grouping API Endpoint
+ * Intelligently categorizes leads based on website analysis
+ * for optimized email marketing campaigns
  */
-
-header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
-
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit;
-}
-
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405);
-    echo json_encode(['error' => 'Method not allowed']);
-    exit;
-}
 
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/functions.php';
 require_once __DIR__ . '/includes/auth.php';
-require_once __DIR__ . '/includes/database.php';
+require_once __DIR__ . '/includes/ratelimit.php';
 
-// Verify user is authenticated
-$user = authenticateRequest();
-if (!$user) {
-    http_response_code(401);
-    echo json_encode(['error' => 'Authentication required']);
-    exit;
+header('Content-Type: application/json');
+setCorsHeaders();
+handlePreflight();
+
+// Only allow POST
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    sendError('Method not allowed', 405);
 }
 
-// Get user's Google Drive token
-$db = getDB();
-$pdo = $db->getConnection();
+// Require authentication
+$user = requireAuth();
 
-$stmt = $pdo->prepare('SELECT google_drive_token, google_drive_refresh_token FROM users WHERE id = ?');
-$stmt->execute([$user['id']]);
-$userData = $stmt->fetch(PDO::FETCH_ASSOC);
+// Get and validate input
+$input = getJsonInput();
+if (!$input) {
+    sendError('Invalid JSON input');
+}
 
-if (empty($userData['google_drive_token']) && empty($userData['google_drive_refresh_token'])) {
-    http_response_code(403);
-    echo json_encode([
-        'error' => 'Google Drive not connected',
-        'needs_auth' => true
+$leads = $input['leads'] ?? [];
+if (empty($leads)) {
+    sendError('No leads provided');
+}
+
+try {
+    $groupedLeads = analyzeAndGroupLeads($leads);
+    
+    sendJson([
+        'success' => true,
+        'data' => $groupedLeads,
+        'summary' => generateLeadSummary($groupedLeads),
+        'emailStrategies' => generateEmailStrategies($groupedLeads)
     ]);
-    exit;
-}
-
-$accessToken = $userData['google_drive_token'];
-
-// Try to refresh token if we have a refresh token
-if (!empty($userData['google_drive_refresh_token'])) {
-    $refreshResponse = refreshGoogleToken($userData['google_drive_refresh_token']);
-    if ($refreshResponse) {
-        $accessToken = $refreshResponse['access_token'];
-        
-        // Update stored token
-        $stmt = $pdo->prepare('UPDATE users SET google_drive_token = ? WHERE id = ?');
-        $stmt->execute([$accessToken, $user['id']]);
+} catch (Exception $e) {
+    if (defined('DEBUG_MODE') && DEBUG_MODE) {
+        sendError($e->getMessage(), 500);
+    } else {
+        sendError('An error occurred while analyzing leads', 500);
     }
 }
-
-// Get leads data from request
-$input = json_decode(file_get_contents('php://input'), true);
-$leads = $input['leads'] ?? [];
-$filename = $input['filename'] ?? 'verified-leads-' . date('Y-m-d');
-
-if (empty($leads)) {
-    http_response_code(400);
-    echo json_encode(['error' => 'No leads provided']);
-    exit;
-}
-
-// Create CSV content
-$csvLines = [];
-$csvLines[] = implode(',', ['Name', 'Email', 'Phone', 'Website', 'Lead Score', 'Priority', 'Best Contact Time', 'Marketing Angle', 'Predicted Response', 'Email Valid', 'Talking Points', 'Pain Points']);
-
-foreach ($leads as $lead) {
-    $csvLines[] = implode(',', [
-        '"' . str_replace('"', '""', $lead['name'] ?? '') . '"',
-        '"' . str_replace('"', '""', $lead['email'] ?? '') . '"',
-        '"' . str_replace('"', '""', $lead['phone'] ?? '') . '"',
-        '"' . str_replace('"', '""', $lead['website'] ?? '') . '"',
-        $lead['leadScore'] ?? '',
-        $lead['conversionProbability'] ?? '',
-        '"' . str_replace('"', '""', $lead['bestContactTime'] ?? '') . '"',
-        '"' . str_replace('"', '""', $lead['marketingAngle'] ?? '') . '"',
-        ($lead['predictedResponse'] ?? '') . '%',
-        ($lead['emailValid'] ?? false) ? 'Yes' : 'No',
-        '"' . str_replace('"', '""', implode('; ', $lead['talkingPoints'] ?? [])) . '"',
-        '"' . str_replace('"', '""', implode('; ', $lead['painPoints'] ?? [])) . '"'
-    ]);
-}
-
-$csvContent = implode("\n", $csvLines);
-
-// Upload to Google Drive
-$boundary = '-------' . uniqid();
-$delimiter = "\r\n--" . $boundary . "\r\n";
-$closeDelimiter = "\r\n--" . $boundary . "--";
-
-$metadata = json_encode([
-    'name' => $filename . '.csv',
-    'mimeType' => 'text/csv'
-]);
-
-$body = $delimiter .
-    "Content-Type: application/json; charset=UTF-8\r\n\r\n" .
-    $metadata .
-    $delimiter .
-    "Content-Type: text/csv\r\n\r\n" .
-    $csvContent .
-    $closeDelimiter;
-
-$ch = curl_init('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart');
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_POST, true);
-curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-curl_setopt($ch, CURLOPT_HTTPHEADER, [
-    'Authorization: Bearer ' . $accessToken,
-    'Content-Type: multipart/related; boundary=' . $boundary,
-    'Content-Length: ' . strlen($body)
-]);
-
-$response = curl_exec($ch);
-$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-curl_close($ch);
-
-if ($httpCode === 401) {
-    // Token expired, need re-auth
-    $stmt = $pdo->prepare('UPDATE users SET google_drive_token = NULL WHERE id = ?');
-    $stmt->execute([$user['id']]);
-    
-    http_response_code(403);
-    echo json_encode([
-        'error' => 'Google Drive token expired',
-        'needs_auth' => true
-    ]);
-    exit;
-}
-
-if ($httpCode !== 200) {
-    http_response_code(500);
-    echo json_encode(['error' => 'Failed to upload to Google Drive', 'details' => $response]);
-    exit;
-}
-
-$fileData = json_decode($response, true);
-
-echo json_encode([
-    'success' => true,
-    'file_id' => $fileData['id'],
-    'file_name' => $filename . '.csv',
-    'web_view_link' => 'https://drive.google.com/file/d/' . $fileData['id'] . '/view'
-]);
 
 /**
- * Refresh Google access token
+ * Main function to analyze and group leads intelligently
  */
-function refreshGoogleToken($refreshToken) {
-    $ch = curl_init('https://oauth2.googleapis.com/token');
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
-        'client_id' => GOOGLE_DRIVE_CLIENT_ID,
-        'client_secret' => GOOGLE_DRIVE_CLIENT_SECRET,
-        'refresh_token' => $refreshToken,
-        'grant_type' => 'refresh_token'
-    ]));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/x-www-form-urlencoded']);
+function analyzeAndGroupLeads($leads) {
+    $groups = [
+        'no_website' => [
+            'label' => 'No Website',
+            'description' => 'Businesses without any online presence - highest opportunity',
+            'priority' => 1,
+            'emailAngle' => 'Build their first website',
+            'urgency' => 'high',
+            'leads' => []
+        ],
+        'broken_website' => [
+            'label' => 'Website Broken/Down',
+            'description' => 'Websites not loading or returning errors',
+            'priority' => 2,
+            'emailAngle' => 'Emergency website rescue',
+            'urgency' => 'critical',
+            'leads' => []
+        ],
+        'not_mobile_friendly' => [
+            'label' => 'Not Mobile Friendly',
+            'description' => 'Missing mobile optimization - losing 60%+ of traffic',
+            'priority' => 3,
+            'emailAngle' => 'Mobile customers are leaving',
+            'urgency' => 'high',
+            'leads' => []
+        ],
+        'outdated_technology' => [
+            'label' => 'Outdated Technology',
+            'description' => 'Using deprecated tech (Flash, old jQuery, legacy platforms)',
+            'priority' => 4,
+            'emailAngle' => 'Security and performance risks',
+            'urgency' => 'medium',
+            'leads' => []
+        ],
+        'poor_seo' => [
+            'label' => 'Poor SEO Setup',
+            'description' => 'Missing meta tags, titles, or social integration',
+            'priority' => 5,
+            'emailAngle' => 'Invisible to Google searches',
+            'urgency' => 'medium',
+            'leads' => []
+        ],
+        'slow_loading' => [
+            'label' => 'Slow Loading',
+            'description' => 'Page load time > 3 seconds - losing customers',
+            'priority' => 6,
+            'emailAngle' => 'Speed equals money',
+            'urgency' => 'medium',
+            'leads' => []
+        ],
+        'diy_platform' => [
+            'label' => 'DIY Platform Limits',
+            'description' => 'Using Wix, Weebly, GoDaddy - limited growth potential',
+            'priority' => 7,
+            'emailAngle' => 'Upgrade to professional solution',
+            'urgency' => 'low',
+            'leads' => []
+        ],
+        'needs_refresh' => [
+            'label' => 'Needs Refresh',
+            'description' => 'Multiple minor issues adding up',
+            'priority' => 8,
+            'emailAngle' => 'Modern redesign opportunity',
+            'urgency' => 'low',
+            'leads' => []
+        ],
+        'good_website' => [
+            'label' => 'Website Looks Good',
+            'description' => 'No major issues detected - consider other services',
+            'priority' => 9,
+            'emailAngle' => 'Maintenance or marketing services',
+            'urgency' => 'nurture',
+            'leads' => []
+        ]
+    ];
     
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-    
-    if ($httpCode === 200) {
-        return json_decode($response, true);
+    foreach ($leads as $lead) {
+        $analysis = $lead['websiteAnalysis'] ?? null;
+        $enrichedLead = enrichLeadWithInsights($lead, $analysis);
+        
+        // Determine primary group
+        $groupKey = determineLeadGroup($enrichedLead, $analysis);
+        $groups[$groupKey]['leads'][] = $enrichedLead;
     }
-    return null;
+    
+    // Remove empty groups and sort by priority
+    $groups = array_filter($groups, function($group) {
+        return !empty($group['leads']);
+    });
+    
+    // Re-index and sort
+    uasort($groups, function($a, $b) {
+        return $a['priority'] - $b['priority'];
+    });
+    
+    return $groups;
+}
+
+/**
+ * Determine which group a lead belongs to based on analysis
+ */
+function determineLeadGroup($lead, $analysis) {
+    // No website at all
+    if (!$analysis || !($analysis['hasWebsite'] ?? false)) {
+        return 'no_website';
+    }
+    
+    $issues = $analysis['issues'] ?? [];
+    $platform = $analysis['platform'] ?? '';
+    $mobileScore = $analysis['mobileScore'] ?? 100;
+    $loadTime = $analysis['loadTime'] ?? 0;
+    
+    // Website broken/not accessible
+    if (in_array('Website not accessible', $issues)) {
+        return 'broken_website';
+    }
+    
+    // Not mobile friendly - critical issue
+    if (in_array('Not mobile responsive', $issues) || $mobileScore < 50) {
+        return 'not_mobile_friendly';
+    }
+    
+    // Outdated technology
+    $outdatedIndicators = ['Uses Flash (deprecated)', 'Outdated jQuery version', 'Outdated HTML structure', 'Tables used for layout'];
+    foreach ($outdatedIndicators as $indicator) {
+        if (in_array($indicator, $issues)) {
+            return 'outdated_technology';
+        }
+    }
+    
+    // Poor SEO
+    $seoIssues = ['Missing meta description', 'Missing or empty title tag', 'Missing social media meta tags', 'Missing alt tags on images'];
+    $seoIssueCount = 0;
+    foreach ($seoIssues as $seoIssue) {
+        if (in_array($seoIssue, $issues)) {
+            $seoIssueCount++;
+        }
+    }
+    if ($seoIssueCount >= 2) {
+        return 'poor_seo';
+    }
+    
+    // Slow loading
+    if ($loadTime > 3000 || in_array('Large page size (slow loading)', $issues)) {
+        return 'slow_loading';
+    }
+    
+    // DIY platforms with limitations
+    $diyPlatforms = ['Wix', 'Weebly', 'GoDaddy', 'Jimdo', 'Web.com'];
+    if (in_array($platform, $diyPlatforms)) {
+        return 'diy_platform';
+    }
+    
+    // Multiple minor issues
+    if (count($issues) >= 2) {
+        return 'needs_refresh';
+    }
+    
+    // Website seems fine
+    return 'good_website';
+}
+
+/**
+ * Enrich lead with AI insights for email marketing
+ */
+function enrichLeadWithInsights($lead, $analysis) {
+    $lead['aiInsights'] = [];
+    $lead['conversionProbability'] = 'medium';
+    $lead['recommendedApproach'] = '';
+    $lead['painPoints'] = [];
+    $lead['talkingPoints'] = [];
+    
+    if (!$analysis || !($analysis['hasWebsite'] ?? false)) {
+        $lead['aiInsights'][] = 'No online presence - missing 87% of customers who search online';
+        $lead['aiInsights'][] = 'Competitors with websites are capturing their potential customers';
+        $lead['conversionProbability'] = 'high';
+        $lead['recommendedApproach'] = 'Offer starter package with quick turnaround';
+        $lead['painPoints'][] = 'Invisible to online searches';
+        $lead['painPoints'][] = 'Losing to competitors with websites';
+        $lead['talkingPoints'][] = 'How do customers find you right now?';
+        $lead['talkingPoints'][] = 'Have you noticed competitors getting more business?';
+        return $lead;
+    }
+    
+    $issues = $analysis['issues'] ?? [];
+    $platform = $analysis['platform'] ?? '';
+    $mobileScore = $analysis['mobileScore'] ?? 100;
+    $loadTime = $analysis['loadTime'] ?? 0;
+    
+    // Mobile issues
+    if (in_array('Not mobile responsive', $issues) || $mobileScore < 60) {
+        $lead['aiInsights'][] = 'Over 60% of their potential customers are on mobile devices';
+        $lead['aiInsights'][] = 'Google penalizes non-mobile-friendly sites in search rankings';
+        $lead['painPoints'][] = 'Losing mobile customers';
+        $lead['talkingPoints'][] = 'Have you tried viewing your site on a phone?';
+        $lead['conversionProbability'] = 'high';
+    }
+    
+    // Speed issues
+    if ($loadTime > 3000) {
+        $loadSeconds = round($loadTime / 1000, 1);
+        $lead['aiInsights'][] = "Website takes {$loadSeconds}s to load - 53% of visitors leave after 3 seconds";
+        $lead['painPoints'][] = 'Slow website losing customers';
+        $lead['talkingPoints'][] = 'Do you notice customers complaining about your site?';
+    }
+    
+    // SEO issues
+    if (in_array('Missing meta description', $issues) || in_array('Missing or empty title tag', $issues)) {
+        $lead['aiInsights'][] = 'Missing basic SEO - invisible in Google searches';
+        $lead['painPoints'][] = 'Not appearing in search results';
+        $lead['talkingPoints'][] = 'When you Google your business, where do you rank?';
+    }
+    
+    // Outdated tech
+    if (in_array('Uses Flash (deprecated)', $issues) || in_array('Outdated jQuery version', $issues)) {
+        $lead['aiInsights'][] = 'Using deprecated technology - security vulnerabilities';
+        $lead['painPoints'][] = 'Security risks';
+        $lead['conversionProbability'] = 'high';
+    }
+    
+    // DIY platform
+    $diyPlatforms = ['Wix', 'Weebly', 'GoDaddy', 'Jimdo'];
+    if (in_array($platform, $diyPlatforms)) {
+        $lead['aiInsights'][] = "Using $platform - limited customization and SEO capabilities";
+        $lead['painPoints'][] = 'Platform limitations hindering growth';
+        $lead['talkingPoints'][] = 'Are there features you wish your website had?';
+    }
+    
+    // Generate recommended approach based on findings
+    if ($lead['conversionProbability'] === 'high') {
+        $lead['recommendedApproach'] = 'Urgent outreach - clear problem to solve';
+    } elseif (count($lead['painPoints']) >= 2) {
+        $lead['recommendedApproach'] = 'Educational approach - show them what they are missing';
+    } else {
+        $lead['recommendedApproach'] = 'Nurture sequence - build relationship first';
+        $lead['conversionProbability'] = 'low';
+    }
+    
+    return $lead;
+}
+
+/**
+ * Generate summary statistics for the grouped leads
+ */
+function generateLeadSummary($groups) {
+    $totalLeads = 0;
+    $highPriority = 0;
+    $mediumPriority = 0;
+    $lowPriority = 0;
+    
+    foreach ($groups as $key => $group) {
+        $count = count($group['leads']);
+        $totalLeads += $count;
+        
+        switch ($group['urgency']) {
+            case 'critical':
+            case 'high':
+                $highPriority += $count;
+                break;
+            case 'medium':
+                $mediumPriority += $count;
+                break;
+            default:
+                $lowPriority += $count;
+        }
+    }
+    
+    return [
+        'total' => $totalLeads,
+        'highPriority' => $highPriority,
+        'mediumPriority' => $mediumPriority,
+        'lowPriority' => $lowPriority,
+        'groupCount' => count($groups),
+        'recommendation' => $highPriority > 0 
+            ? "Focus on {$highPriority} high-priority leads first - they have clear problems you can solve"
+            : "Build relationships with educational content for these leads"
+    ];
+}
+
+/**
+ * Generate email strategies for each group
+ */
+function generateEmailStrategies($groups) {
+    $strategies = [];
+    
+    $strategyTemplates = [
+        'no_website' => [
+            'subject' => 'Quick question about {business_name}',
+            'hook' => 'I noticed you don\'t have a website yet...',
+            'cta' => 'Free consultation to discuss your options',
+            'followUpDays' => [3, 7, 14],
+            'toneRecommendation' => 'Helpful, not pushy - they may not know they need one'
+        ],
+        'broken_website' => [
+            'subject' => 'Is your website down? (noticed something)',
+            'hook' => 'I tried visiting your website and it wasn\'t loading...',
+            'cta' => 'Emergency fix - can have you back online today',
+            'followUpDays' => [1, 2, 5],
+            'toneRecommendation' => 'Urgent but helpful - they may not know it\'s broken'
+        ],
+        'not_mobile_friendly' => [
+            'subject' => 'Tested your site on my phone...',
+            'hook' => 'I checked {business_name}\'s website on mobile and noticed some issues...',
+            'cta' => 'Free mobile audit with screenshots',
+            'followUpDays' => [3, 7, 14],
+            'toneRecommendation' => 'Show don\'t tell - include mobile screenshots'
+        ],
+        'outdated_technology' => [
+            'subject' => 'Quick security check for {business_name}',
+            'hook' => 'I noticed your website is using some older technology...',
+            'cta' => 'Free security assessment',
+            'followUpDays' => [5, 10, 21],
+            'toneRecommendation' => 'Technical but not scary'
+        ],
+        'poor_seo' => [
+            'subject' => 'Why {business_name} isn\'t showing up in Google',
+            'hook' => 'I searched for your services and had trouble finding you...',
+            'cta' => 'Free SEO report showing exactly what to fix',
+            'followUpDays' => [4, 10, 21],
+            'toneRecommendation' => 'Educational with data'
+        ],
+        'slow_loading' => [
+            'subject' => 'Your website is making customers wait',
+            'hook' => 'Your site took over 3 seconds to load on my test...',
+            'cta' => 'Free speed report with fixes',
+            'followUpDays' => [5, 12, 21],
+            'toneRecommendation' => 'Data-driven with clear ROI'
+        ],
+        'diy_platform' => [
+            'subject' => 'Outgrowing your {platform} website?',
+            'hook' => 'I noticed you\'re on {platform}. Great for starting out, but...',
+            'cta' => 'Comparison of what you could unlock',
+            'followUpDays' => [7, 14, 28],
+            'toneRecommendation' => 'Don\'t insult their choice - show possibilities'
+        ],
+        'needs_refresh' => [
+            'subject' => 'A few tweaks that could help {business_name}',
+            'hook' => 'Looked at your website and spotted some easy wins...',
+            'cta' => 'Free improvement checklist',
+            'followUpDays' => [7, 14, 28],
+            'toneRecommendation' => 'Collaborative partner approach'
+        ],
+        'good_website' => [
+            'subject' => 'Nice website! One idea for {business_name}',
+            'hook' => 'Your site looks great. Have you considered...',
+            'cta' => 'Explore complementary services',
+            'followUpDays' => [14, 30, 60],
+            'toneRecommendation' => 'Nurture - build long-term relationship'
+        ]
+    ];
+    
+    foreach ($groups as $key => $group) {
+        if (isset($strategyTemplates[$key])) {
+            $strategies[$key] = $strategyTemplates[$key];
+            $strategies[$key]['leadCount'] = count($group['leads']);
+            $strategies[$key]['groupLabel'] = $group['label'];
+        }
+    }
+    
+    return $strategies;
 }

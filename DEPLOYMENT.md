@@ -1,238 +1,157 @@
-# Backend Deployment & Verification Checklist
-
-## 🚀 Quick Start
-
-Your backend is PHP-based and hosted on Hostinger. This checklist ensures everything works.
-
----
-
-## Step 1: Upload Files to Hostinger
-
-Upload the entire `hostinger-backend/` folder contents to `/public_html/api/`:
-
-```
-/public_html/api/
-├── .htaccess
-├── admin.php
-├── analyze-leads.php
-├── analyze-website.php
-├── auth.php
-├── config.php          ← Create from config.example.php
-├── cron-email.php
-├── diagnostics.php     ← NEW: System diagnostics
-├── email-outreach.php
-├── error.php
-├── gmb-search.php
-├── google-drive-auth.php    ← NEW: Google Drive OAuth
-├── google-drive-callback.php
-├── google-drive-export.php
-├── health.php
-├── password.php
-├── platform-search.php
-├── stripe.php
-├── stripe-webhook.php
-├── verified-leads.php
-├── verify-lead.php
-├── includes/
-│   ├── auth.php
-│   ├── database.php
-│   ├── email.php
-│   ├── functions.php
-│   ├── ratelimit.php
-│   └── stripe.php
-└── database/
-    ├── schema.sql
-    ├── email_outreach.sql
-    ├── rate_limits.sql
-    ├── subscriptions.sql
-    ├── verification_tokens.sql
-    ├── verified_leads.sql
-    └── google_drive_tokens.sql
-```
-
----
-
-## Step 2: Create config.php
-
-Copy `config.example.php` to `config.php` and fill in these values:
-
-```php
 <?php
-// DATABASE - Get from Hostinger hPanel → Databases
+/**
+ * Configuration file for BamLead Search API
+ * 
+ * INSTRUCTIONS:
+ * 1. Copy the entire hostinger-backend folder to your Hostinger hosting
+ * 2. Replace the placeholder values with your actual API keys
+ * 3. Get a Google Custom Search API key from: https://console.cloud.google.com/
+ * 4. Create a Custom Search Engine at: https://programmablesearchengine.google.com/
+ * 5. Update ALLOWED_ORIGINS with your production domain
+ * 6. Configure your MySQL database credentials below
+ */
+
+// =====================================
+// DATABASE CONFIGURATION (Hostinger MySQL)
+// =====================================
+// Find these in Hostinger hPanel -> Databases -> MySQL Databases
 define('DB_HOST', 'localhost');
 define('DB_NAME', 'u497238762_bamlead');
 define('DB_USER', 'u497238762_bamlead');
-define('DB_PASS', 'YOUR_REAL_PASSWORD');  // ← CHANGE THIS
+define('DB_PASS', 'YOUR_DATABASE_PASSWORD_HERE'); // <-- REPLACE THIS
 
-// SERPAPI - For lead search (https://serpapi.com)
-define('SERPAPI_KEY', 'your_serpapi_key_here');  // ← CHANGE THIS
+// =====================================
+// SERPAPI (Required for GMB Search)
+// =====================================
+// Get from: https://serpapi.com/manage-api-key
+define('SERPAPI_KEY', 'YOUR_SERPAPI_KEY_HERE'); // <-- REPLACE THIS
 
-// EMAIL/SMTP - For sending emails
+// =====================================
+// GOOGLE CUSTOM SEARCH API (Optional)
+// =====================================
+define('GOOGLE_API_KEY', '');
+define('GOOGLE_SEARCH_ENGINE_ID', '');
+
+// =====================================
+// BING SEARCH API (Optional)
+// =====================================
+define('BING_API_KEY', '');
+
+// =====================================
+// EMAIL SETTINGS
+// =====================================
 define('MAIL_FROM_ADDRESS', 'noreply@bamlead.com');
 define('MAIL_FROM_NAME', 'BamLead');
+
+// SMTP Settings (for email verification)
 define('SMTP_HOST', 'smtp.hostinger.com');
 define('SMTP_PORT', 465);
 define('SMTP_USER', 'noreply@bamlead.com');
-define('SMTP_PASS', 'your_email_password');  // ← CHANGE THIS
+define('SMTP_PASS', 'YOUR_NOREPLY_EMAIL_PASSWORD'); // <-- REPLACE THIS
 define('SMTP_SECURE', 'ssl');
+
+// Frontend URL (for email links)
 define('FRONTEND_URL', 'https://bamlead.com');
 
-// STRIPE - For payments (https://dashboard.stripe.com/apikeys)
-define('STRIPE_SECRET_KEY', 'sk_live_...');  // ← CHANGE THIS
-define('STRIPE_PUBLISHABLE_KEY', 'pk_live_...');  // ← CHANGE THIS
-define('STRIPE_WEBHOOK_SECRET', 'whsec_...');  // ← CHANGE THIS
+// =====================================
+// STRIPE SETTINGS
+// =====================================
+// Get from: https://dashboard.stripe.com/apikeys
+define('STRIPE_SECRET_KEY', 'sk_live_YOUR_KEY_HERE'); // <-- REPLACE THIS
+define('STRIPE_PUBLISHABLE_KEY', 'pk_live_YOUR_KEY_HERE'); // <-- REPLACE THIS
+define('STRIPE_WEBHOOK_SECRET', 'whsec_YOUR_SECRET_HERE'); // <-- REPLACE THIS
 
-// Price IDs from Stripe Dashboard → Products
+// Stripe Price IDs (create in Stripe Dashboard -> Products)
 define('STRIPE_PRICES', [
     'basic' => [
-        'monthly' => 'price_xxx',  // ← Your Basic monthly price ID
-        'yearly' => 'price_xxx',
+        'monthly' => 'price_BASIC_MONTHLY', // <-- REPLACE
+        'yearly' => 'price_BASIC_YEARLY',
     ],
     'pro' => [
-        'monthly' => 'price_xxx',  // ← Your Pro monthly price ID
-        'yearly' => 'price_xxx',
+        'monthly' => 'price_PRO_MONTHLY', // <-- REPLACE
+        'yearly' => 'price_PRO_YEARLY',
     ],
     'agency' => [
-        'monthly' => 'price_xxx',  // ← Your Agency monthly price ID
-        'yearly' => 'price_xxx',
+        'monthly' => 'price_AGENCY_MONTHLY', // <-- REPLACE
+        'yearly' => 'price_AGENCY_YEARLY',
     ],
 ]);
 
-// CRON SECRET - For scheduled emails (generate random string)
-define('CRON_SECRET_KEY', 'generate_a_random_32_char_string');  // ← CHANGE THIS
+// =====================================
+// OPENAI API (For AI Features)
+// =====================================
+define('OPENAI_API_KEY', 'sk-YOUR_OPENAI_KEY_HERE'); // <-- REPLACE THIS
 
-// JWT SECRET - For token auth (generate random string)
-define('JWT_SECRET', 'another_random_32_char_string');  // ← CHANGE THIS
-
-// OPENAI - For AI features (optional)
-define('OPENAI_API_KEY', 'sk-...');  // ← Optional
-
-// GOOGLE DRIVE - For export (optional)
-define('GOOGLE_DRIVE_CLIENT_ID', '');  // ← Optional
-define('GOOGLE_DRIVE_CLIENT_SECRET', '');  // ← Optional
+// =====================================
+// GOOGLE DRIVE API (For Export Features)
+// =====================================
+// Get from: https://console.cloud.google.com/apis/credentials
+// Create OAuth 2.0 Client ID for Web application
+define('GOOGLE_DRIVE_CLIENT_ID', ''); // <-- REPLACE THIS
+define('GOOGLE_DRIVE_CLIENT_SECRET', ''); // <-- REPLACE THIS
 define('GOOGLE_DRIVE_REDIRECT_URI', 'https://bamlead.com/api/google-drive-callback.php');
 
-// OTHER SETTINGS
+// =====================================
+// JWT SECRET (For Token Authentication)
+// =====================================
+// Generate at: https://randomkeygen.com/
+define('JWT_SECRET', 'REPLACE_WITH_RANDOM_32_CHAR_STRING'); // <-- REPLACE THIS
+
+// =====================================
+// CORS SETTINGS
+// =====================================
 define('ALLOWED_ORIGINS', [
     'https://bamlead.com',
     'https://www.bamlead.com',
+    'http://localhost:5173',
+    'http://localhost:8080',
 ]);
+
+// =====================================
+// RATE LIMITING
+// =====================================
+// Requests per minute per IP
 define('RATE_LIMIT', 30);
-define('CACHE_DURATION', 300);
+
+// =====================================
+// CACHE SETTINGS
+// =====================================
+// Cache duration for search results (in seconds)
+define('CACHE_DURATION', 300); // 5 minutes
+
+// Enable file-based caching
 define('ENABLE_CACHE', true);
 define('CACHE_DIR', __DIR__ . '/cache');
-define('SESSION_LIFETIME', 604800);
-define('DEBUG_MODE', false);  // Set to true temporarily for debugging
-```
 
----
+// =====================================
+// SESSION SETTINGS
+// =====================================
+define('SESSION_LIFETIME', 604800); // 7 days in seconds
 
-## Step 3: Run Database Migrations
+// =====================================
+// SUBSCRIPTION SETTINGS
+// =====================================
+define('TRIAL_DAYS', 14);
+define('FREE_SEARCHES_PER_DAY', 5);
+define('PAID_SEARCHES_PER_DAY', 100);
 
-In Hostinger's phpMyAdmin, run these SQL files in order:
+// =====================================
+// WEBSITE ANALYSIS SETTINGS
+// =====================================
+// Timeout for analyzing websites (in seconds)
+define('WEBSITE_TIMEOUT', 10);
 
-1. `database/schema.sql` - Core tables
-2. `database/email_outreach.sql` - Email system
-3. `database/rate_limits.sql` - Rate limiting
-4. `database/subscriptions.sql` - Stripe subscriptions
-5. `database/verification_tokens.sql` - Email verification
-6. `database/verified_leads.sql` - Verified leads
-7. `database/google_drive_tokens.sql` - Google Drive tokens
+// Maximum page size to download (in bytes)
+define('MAX_PAGE_SIZE', 2 * 1024 * 1024); // 2MB
 
----
+// =====================================
+// SEARCH SETTINGS
+// =====================================
+// Number of results per search (max 10 for Google, 50 for Bing)
+define('RESULTS_PER_PAGE', 10);
 
-## Step 4: Set Up Cron Job
-
-In Hostinger hPanel → Cron Jobs → Add:
-
-**Command:**
-```
-wget -q -O /dev/null "https://bamlead.com/api/cron-email.php?key=YOUR_CRON_SECRET_KEY"
-```
-
-**Schedule:** Every minute (`* * * * *`)
-
----
-
-## Step 5: Create Email Account
-
-In Hostinger hPanel → Emails:
-1. Create email: `noreply@bamlead.com`
-2. Set a secure password
-3. Update `SMTP_PASS` in config.php with this password
-
----
-
-## Step 6: Verify Everything Works
-
-### Quick Tests:
-
-1. **Health Check:**
-   ```
-   https://bamlead.com/api/health.php
-   ```
-   Should return JSON with `status: "ok"`
-
-2. **Full Diagnostics:**
-   ```
-   https://bamlead.com/api/diagnostics.php?key=YOUR_CRON_SECRET_KEY
-   ```
-   Shows status of all systems
-
-3. **In Dashboard:**
-   Go to Dashboard → Backend Diagnostics to run comprehensive tests
-
----
-
-## Troubleshooting
-
-### "Page Not Found" on API endpoints
-- Files not uploaded to `/public_html/api/`
-- Check `.htaccess` exists in `/api/`
-
-### "Invalid JSON" responses
-- PHP syntax error in `config.php`
-- Check for missing quotes/semicolons
-- Set `DEBUG_MODE` to `true` temporarily
-
-### "Database connection failed"
-- Wrong credentials in `config.php`
-- Verify in Hostinger hPanel → Databases
-
-### "SMTP error"
-- Email account doesn't exist
-- Wrong password in `config.php`
-- Create email in hPanel → Emails
-
-### "Unauthorized" on API calls
-- `includes/auth.php` missing
-- Session not being maintained
-
----
-
-## API Endpoints Reference
-
-| Endpoint | Purpose |
-|----------|---------|
-| `/api/health.php` | Health check |
-| `/api/diagnostics.php?key=X` | Full system diagnostics |
-| `/api/auth.php` | Login/register/logout |
-| `/api/gmb-search.php` | GMB lead search |
-| `/api/platform-search.php` | Platform scanner |
-| `/api/analyze-leads.php` | AI lead grouping |
-| `/api/email-outreach.php` | Email templates & sending |
-| `/api/cron-email.php?key=X` | Process scheduled emails |
-| `/api/stripe.php` | Stripe checkout/portal |
-| `/api/verified-leads.php` | Saved leads management |
-
----
-
-## Security Notes
-
-⚠️ **Never commit config.php to Git** - It contains secrets
-
-⚠️ **Set DEBUG_MODE = false** in production
-
-⚠️ **Use HTTPS** for all API calls
-
-⚠️ **Rotate CRON_SECRET_KEY** periodically
+// =====================================
+// DEBUG MODE
+// =====================================
+// Set to true to enable detailed error messages (disable in production!)
+define('DEBUG_MODE', false);

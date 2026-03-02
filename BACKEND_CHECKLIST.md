@@ -1,36 +1,70 @@
-# Enable CORS and routing for API
-<IfModule mod_headers.c>
-    Header always set Access-Control-Allow-Origin "*"
-    Header always set Access-Control-Allow-Methods "POST, GET, OPTIONS"
-    Header always set Access-Control-Allow-Headers "Content-Type, Authorization"
-</IfModule>
+<?php
+/**
+ * Website Analysis API Endpoint
+ * Analyzes a single website for platform detection and issues
+ */
 
-# Handle OPTIONS preflight requests
-RewriteEngine On
-RewriteCond %{REQUEST_METHOD} OPTIONS
-RewriteRule ^(.*)$ $1 [R=200,L]
+require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/functions.php';
 
-# Protect config file
-<Files "config.php">
-    Order allow,deny
-    Deny from all
-</Files>
+header('Content-Type: application/json');
+setCorsHeaders();
+handlePreflight();
 
-# Protect includes directory
-<IfModule mod_rewrite.c>
-    RewriteRule ^includes/ - [F,L]
-</IfModule>
+// Allow both GET and POST
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $url = isset($_GET['url']) ? trim($_GET['url']) : '';
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $input = getJsonInput();
+    $url = isset($input['url']) ? trim($input['url']) : '';
+} else {
+    sendError('Method not allowed', 405);
+}
 
-# Protect cache directory  
-<IfModule mod_rewrite.c>
-    RewriteRule ^cache/ - [F,L]
-</IfModule>
+if (empty($url)) {
+    sendError('URL is required');
+}
 
-# Enable compression for JSON responses
-<IfModule mod_deflate.c>
-    AddOutputFilterByType DEFLATE application/json
-</IfModule>
+// Ensure URL has protocol
+if (!preg_match('/^https?:\/\//', $url)) {
+    $url = 'https://' . $url;
+}
 
-# Error handling
-ErrorDocument 404 /api/error.php
-ErrorDocument 500 /api/error.php
+// Validate URL
+if (!filter_var($url, FILTER_VALIDATE_URL)) {
+    sendError('Invalid URL format');
+}
+
+try {
+    $cacheKey = "analyze_website_" . md5($url);
+    
+    // Check cache
+    $cached = getCache($cacheKey);
+    if ($cached !== null) {
+        sendJson([
+            'success' => true,
+            'data' => $cached,
+            'cached' => true
+        ]);
+    }
+    
+    $analysis = analyzeWebsite($url);
+    
+    // Add extra details
+    $analysis['url'] = $url;
+    $analysis['analyzedAt'] = date('c');
+    
+    // Cache results
+    setCache($cacheKey, $analysis);
+    
+    sendJson([
+        'success' => true,
+        'data' => $analysis
+    ]);
+} catch (Exception $e) {
+    if (DEBUG_MODE) {
+        sendError($e->getMessage(), 500);
+    } else {
+        sendError('An error occurred while analyzing the website', 500);
+    }
+}
