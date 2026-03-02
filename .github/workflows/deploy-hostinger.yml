@@ -188,6 +188,10 @@ jobs:
             rm -rf "$TARGET/assets"
             cp -a "$TARGET/dist/index.html" "$TARGET/index.html"
             cp -a "$TARGET/dist/assets" "$TARGET/assets"
+            find "$TARGET/dist" -mindepth 1 -maxdepth 1 \
+              ! -name "index.html" \
+              ! -name "assets" \
+              -exec cp -a {} "$TARGET"/ \;
             if [ -f "$TARGET/.htaccess" ] && grep -q "Do not rewrite API/WS paths (they should be handled upstream)." "$TARGET/.htaccess"; then
               echo "[deploy] removing legacy generated .htaccess that blocks /employeelogin/api routing"
               rm -f "$TARGET/.htaccess"
