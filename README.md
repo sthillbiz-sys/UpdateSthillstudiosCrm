@@ -1,162 +1,60 @@
-<?php
-/**
- * Password Reset & Email Verification API Endpoint
- */
+# BamLead Chrome Extension - Installation Guide
 
-require_once __DIR__ . '/includes/functions.php';
-require_once __DIR__ . '/includes/auth.php';
-require_once __DIR__ . '/includes/email.php';
+## How to Install (Developer Mode)
 
-// Handle CORS
-setCorsHeaders();
-handlePreflight();
+Since this extension is not published to the Chrome Web Store yet, you need to install it manually:
 
-$action = $_GET['action'] ?? '';
+### Step 1: Download the Extension Files
+1. Download or clone this repository
+2. Locate the `chrome-extension` folder
 
-switch ($action) {
-    case 'forgot-password':
-        handleForgotPassword();
-        break;
-    case 'reset-password':
-        handleResetPassword();
-        break;
-    case 'verify-email':
-        handleVerifyEmail();
-        break;
-    case 'resend-verification':
-        handleResendVerification();
-        break;
-    default:
-        sendError('Invalid action', 400);
-}
+### Step 2: Open Chrome Extensions Page
+1. Open Google Chrome
+2. Type `chrome://extensions` in the address bar and press Enter
+3. Or go to Menu (⋮) → More Tools → Extensions
 
-/**
- * Request password reset
- */
-function handleForgotPassword() {
-    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        sendError('Method not allowed', 405);
-    }
-    
-    $input = getJsonInput();
-    $email = sanitizeInput($input['email'] ?? '', 255);
-    
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        sendError('Invalid email address');
-    }
-    
-    $db = getDB();
-    $user = $db->fetchOne("SELECT id, name, email FROM users WHERE email = ?", [strtolower($email)]);
-    
-    // Always return success to prevent email enumeration
-    if ($user) {
-        sendPasswordResetEmail($user['id'], $user['email'], $user['name']);
-    }
-    
-    sendJson([
-        'success' => true,
-        'message' => 'If an account exists with that email, you will receive a password reset link.'
-    ]);
-}
+### Step 3: Enable Developer Mode
+1. In the top-right corner, toggle **"Developer mode"** ON
 
-/**
- * Reset password with token
- */
-function handleResetPassword() {
-    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        sendError('Method not allowed', 405);
-    }
-    
-    $input = getJsonInput();
-    $token = sanitizeInput($input['token'] ?? '', 64);
-    $password = $input['password'] ?? '';
-    
-    if (!$token) {
-        sendError('Token is required');
-    }
-    
-    if (strlen($password) < 8) {
-        sendError('Password must be at least 8 characters');
-    }
-    
-    // Validate token
-    $tokenData = validateToken($token, 'password_reset');
-    
-    if (!$tokenData) {
-        sendError('Invalid or expired reset link', 400);
-    }
-    
-    $db = getDB();
-    
-    // Update password
-    $db->update(
-        "UPDATE users SET password_hash = ? WHERE id = ?",
-        [hashPassword($password), $tokenData['user_id']]
-    );
-    
-    // Mark token as used
-    markTokenUsed($token);
-    
-    // Clear all sessions for this user (security measure)
-    $db->delete("DELETE FROM sessions WHERE user_id = ?", [$tokenData['user_id']]);
-    
-    sendJson([
-        'success' => true,
-        'message' => 'Password reset successfully. Please sign in with your new password.'
-    ]);
-}
+### Step 4: Load the Extension
+1. Click **"Load unpacked"** button (appears after enabling developer mode)
+2. Navigate to the `chrome-extension` folder
+3. Select the folder and click **"Open"** or **"Select Folder"**
 
-/**
- * Verify email with token
- */
-function handleVerifyEmail() {
-    $token = sanitizeInput($_GET['token'] ?? '', 64);
-    
-    if (!$token) {
-        sendError('Token is required');
-    }
-    
-    $tokenData = validateToken($token, 'email_verification');
-    
-    if (!$tokenData) {
-        sendError('Invalid or expired verification link', 400);
-    }
-    
-    $db = getDB();
-    
-    // Mark email as verified
-    $db->update(
-        "UPDATE users SET email_verified = TRUE, email_verified_at = NOW() WHERE id = ?",
-        [$tokenData['user_id']]
-    );
-    
-    // Mark token as used
-    markTokenUsed($token);
-    
-    sendJson([
-        'success' => true,
-        'message' => 'Email verified successfully!'
-    ]);
-}
+### Step 5: Verify Installation
+1. You should see "BamLead - Lead Prospecting" in your extensions list
+2. Click the puzzle piece icon (🧩) in Chrome toolbar
+3. Pin BamLead for easy access
 
-/**
- * Resend verification email
- */
-function handleResendVerification() {
-    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        sendError('Method not allowed', 405);
-    }
-    
-    $user = requireAuth();
-    
-    if ($user['email_verified']) {
-        sendError('Email is already verified');
-    }
-    
-    sendVerificationEmail($user['id'], $user['email'], $user['name']);
-    
-    sendJson([
-        'success' => true,
-        'message' => 'Verification email sent!'
-    ]);
-}
+## Using the Extension
+
+### Extract Contact Info
+1. Visit any business website
+2. Click the BamLead extension icon
+3. Click **"Extract Contact Info"** to find emails, phones, and social links
+
+### Analyze Website
+1. Click **"Analyze Website"** to detect the platform (WordPress, Wix, etc.)
+2. See SEO score and mobile optimization status
+
+### Save Leads
+1. After extracting info, click **"Save as Lead"** to store locally
+2. Click **"Send to BamLead"** to open in the dashboard
+
+### Right-Click Menu
+- Right-click on any page and select **"Save page as BamLead Lead"**
+
+## Troubleshooting
+
+### Extension Won't Load?
+- Make sure Developer mode is enabled
+- Ensure you selected the correct folder (the one containing manifest.json)
+- Check for errors on the extensions page
+
+### Buttons Not Working?
+- Refresh the target page after installing
+- Make sure you're not on a chrome:// or edge:// page (extensions can't run there)
+- Check the popup console for errors (right-click popup → Inspect)
+
+### Need Help?
+Contact support at support@bamlead.com or use the chat on bamlead.com
