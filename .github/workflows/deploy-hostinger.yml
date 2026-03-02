@@ -281,8 +281,13 @@ jobs:
             npm ci
             echo "[deploy] running migrations"
             if ! npm run migrate:latest; then
-              echo "[deploy] migration failed. Verify MYSQL_HOST/MYSQL_PORT or MYSQL_SOCKET_PATH, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE."
-              exit 1
+              echo "[deploy] first migration attempt failed; checking for partial core migration state"
+              node scripts/recover-partial-bolt-migration.cjs
+              echo "[deploy] retrying migrations after recovery"
+              if ! npm run migrate:latest; then
+                echo "[deploy] migration failed. Verify MYSQL_HOST/MYSQL_PORT or MYSQL_SOCKET_PATH, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE."
+                exit 1
+              fi
             fi
 
             if [ "${RUN_SQLITE_IMPORT:-false}" = "true" ]; then

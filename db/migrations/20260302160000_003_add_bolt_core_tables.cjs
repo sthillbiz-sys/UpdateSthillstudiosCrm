@@ -30,8 +30,8 @@ exports.up = async function up(knex) {
     table.string('stage', 64).notNullable().defaultTo('lead');
     table.integer('probability').notNullable().defaultTo(0);
     table.date('expected_close_date').nullable();
-    table.integer('contact_id').nullable();
-    table.integer('company_id').nullable();
+    table.unsignedInteger('contact_id').nullable();
+    table.unsignedInteger('company_id').nullable();
     table.text('notes').nullable();
     table.integer('created_by_user_id').nullable();
     table.timestamp('created_at', { useTz: false }).defaultTo(knex.fn.now());
@@ -57,7 +57,7 @@ exports.up = async function up(knex) {
     table.increments('id').primary();
     table.date('note_date').notNullable();
     table.text('note_text').notNullable();
-    table.integer('contact_id').nullable();
+    table.unsignedInteger('contact_id').nullable();
     table.string('contact_name', 191).nullable();
     table.string('follow_up_type', 64).notNullable().defaultTo('reminder');
     table.string('priority', 32).notNullable().defaultTo('medium');
