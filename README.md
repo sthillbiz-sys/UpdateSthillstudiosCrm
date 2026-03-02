@@ -1,73 +1,60 @@
-# Welcome to your Lovable project
+# BamLead Chrome Extension - Installation Guide
 
-## Project info
+## How to Install (Developer Mode)
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+Since this extension is not published to the Chrome Web Store yet, you need to install it manually:
 
-## How can I edit this code?
+### Step 1: Download the Extension Files
+1. Download or clone this repository
+2. Locate the `chrome-extension` folder
 
-There are several ways of editing your application.
+### Step 2: Open Chrome Extensions Page
+1. Open Google Chrome
+2. Type `chrome://extensions` in the address bar and press Enter
+3. Or go to Menu (⋮) → More Tools → Extensions
 
-**Use Lovable**
+### Step 3: Enable Developer Mode
+1. In the top-right corner, toggle **"Developer mode"** ON
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+### Step 4: Load the Extension
+1. Click **"Load unpacked"** button (appears after enabling developer mode)
+2. Navigate to the `chrome-extension` folder
+3. Select the folder and click **"Open"** or **"Select Folder"**
 
-Changes made via Lovable will be committed automatically to this repo.
+### Step 5: Verify Installation
+1. You should see "BamLead - Lead Prospecting" in your extensions list
+2. Click the puzzle piece icon (🧩) in Chrome toolbar
+3. Pin BamLead for easy access
 
-**Use your preferred IDE**
+## Using the Extension
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+### Extract Contact Info
+1. Visit any business website
+2. Click the BamLead extension icon
+3. Click **"Extract Contact Info"** to find emails, phones, and social links
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+### Analyze Website
+1. Click **"Analyze Website"** to detect the platform (WordPress, Wix, etc.)
+2. See SEO score and mobile optimization status
 
-Follow these steps:
+### Save Leads
+1. After extracting info, click **"Save as Lead"** to store locally
+2. Click **"Send to BamLead"** to open in the dashboard
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+### Right-Click Menu
+- Right-click on any page and select **"Save page as BamLead Lead"**
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+## Troubleshooting
 
-# Step 3: Install the necessary dependencies.
-npm i
+### Extension Won't Load?
+- Make sure Developer mode is enabled
+- Ensure you selected the correct folder (the one containing manifest.json)
+- Check for errors on the extensions page
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
-```
+### Buttons Not Working?
+- Refresh the target page after installing
+- Make sure you're not on a chrome:// or edge:// page (extensions can't run there)
+- Check the popup console for errors (right-click popup → Inspect)
 
-**Edit a file directly in GitHub**
-
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
-
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+### Need Help?
+Contact support at support@bamlead.com or use the chat on bamlead.com

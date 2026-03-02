@@ -1,0 +1,271 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  width: 320px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  background: #0f172a;
+  color: #f1f5f9;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+/* Header */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  border-bottom: 1px solid #1e293b;
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logo-icon {
+  font-size: 20px;
+}
+
+.logo-text {
+  font-size: 18px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Main Content */
+.main {
+  flex: 1;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Sections */
+.section {
+  background: #1e293b;
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #64748b;
+  margin-bottom: 12px;
+}
+
+/* Page Info */
+.page-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.page-url {
+  font-size: 13px;
+  color: #94a3b8;
+  word-break: break-all;
+  background: #0f172a;
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+
+/* Actions */
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: #334155;
+  color: #f1f5f9;
+}
+
+.action-btn:hover {
+  background: #475569;
+  transform: translateY(-1px);
+}
+
+.action-btn:active {
+  transform: translateY(0);
+}
+
+.action-btn.primary {
+  background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%);
+  color: #fff;
+}
+
+.action-btn.primary:hover {
+  background: linear-gradient(135deg, #0d9488 0%, #0f766e 100%);
+}
+
+.action-btn.success {
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+  color: #fff;
+}
+
+.action-btn.success:hover {
+  background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+}
+
+.btn-icon {
+  font-size: 14px;
+}
+
+/* Data List */
+.data-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.data-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #0f172a;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.data-label {
+  color: #64748b;
+}
+
+.data-value {
+  color: #f1f5f9;
+  font-weight: 500;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Stats */
+.stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.stat {
+  text-align: center;
+  padding: 12px;
+  background: #0f172a;
+  border-radius: 8px;
+}
+
+.stat-value {
+  display: block;
+  font-size: 24px;
+  font-weight: 700;
+  color: #14b8a6;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 4px;
+}
+
+/* Footer */
+.footer {
+  padding: 12px 16px;
+  text-align: center;
+  border-top: 1px solid #1e293b;
+}
+
+.footer-link {
+  font-size: 12px;
+  color: #14b8a6;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.footer-link:hover {
+  text-decoration: underline;
+}
+
+/* Loading state */
+.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #22c55e;
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
