@@ -1,0 +1,17 @@
+# BamLead Routing
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Never rewrite API requests
+  RewriteRule ^api(/.*)?$ - [L]
+
+  # Don't rewrite existing files or directories
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # SPA fallback (everything else goes to index.html in root)
+  RewriteRule ^ index.html [L]
+</IfModule>
+
