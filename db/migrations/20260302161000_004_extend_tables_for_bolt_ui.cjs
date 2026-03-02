@@ -5,7 +5,7 @@ exports.up = async function up(knex) {
   await knex.schema.alterTable('contacts', (table) => {
     table.string('first_name', 128).nullable();
     table.string('last_name', 128).nullable();
-    table.unsignedInteger('company_id').nullable();
+    table.integer('company_id').unsigned().nullable();
     table.string('position', 128).nullable();
     table.text('notes').nullable();
     table.timestamp('created_at', { useTz: false }).defaultTo(knex.fn.now());
