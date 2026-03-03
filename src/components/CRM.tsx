@@ -28,6 +28,17 @@ export function CRM() {
   const { signOut, user } = useAuth();
 
   const isOwner = user?.email === 'thesthillstudios@gmail.com';
+  const accountName = user?.name?.trim() || user?.email?.split('@')[0] || 'User';
+  const accountInitials = accountName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || '')
+    .join('') || 'U';
+  const accountRole = (user?.role || 'employee')
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 
   const navigation = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, color: 'text-cyan-400' },
@@ -147,11 +158,11 @@ export function CRM() {
             <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2 px-3">Account</div>
             <div className="flex items-center gap-2 px-3 py-2 mb-2">
               <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-semibold">
-                A
+                {accountInitials}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-xs text-white font-semibold">Adrian St. Hill</p>
-                <p className="text-[10px] text-gray-400 uppercase">Admin</p>
+                <p className="text-xs text-white font-semibold truncate">{accountName}</p>
+                <p className="text-[10px] text-gray-400 uppercase">{accountRole}</p>
               </div>
               <button
                 onClick={() => signOut()}
