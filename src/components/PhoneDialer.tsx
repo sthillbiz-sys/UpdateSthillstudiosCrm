@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Phone, Settings, Trash2, HelpCircle, X, Video, Mic, Users, History, User, Delete, GripVertical } from 'lucide-react';
 import { usePresence } from '../lib/presence';
 import { useAuth } from '../lib/auth';
+import { LOGO_SRC } from '../lib/assets';
 
 interface PhoneDialerProps {
   onClose?: () => void;
@@ -105,7 +106,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
                 <img
-                  src="/NEW_sthillstudisoslogo.png"
+                  src={LOGO_SRC}
                   alt="SthillStudios"
                   className="h-6 w-auto drop-shadow-lg"
                 />
@@ -153,7 +154,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
               <div className="bg-gradient-to-br from-slate-700 to-slate-800 rounded-xl p-3 shadow-inner border border-slate-600">
                 <div className="flex items-center justify-center mb-1">
                   <img
-                    src="/NEW_sthillstudisoslogo.png"
+                    src={LOGO_SRC}
                     alt="SthillStudios"
                     className="h-4 w-auto opacity-40"
                   />
@@ -301,11 +302,11 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
         <div className="bg-slate-800 rounded-2xl p-6 mb-6">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
-              <img
-                src="/NEW_sthillstudisoslogo.png"
-                alt="SthillStudios Logo"
-                className="w-32 h-auto"
-              />
+                <img
+                  src={LOGO_SRC}
+                  alt="SthillStudios Logo"
+                  className="w-32 h-auto"
+                />
             </div>
             <div className="flex items-center gap-3">
               <button className="flex items-center gap-2 px-4 py-2 text-sm text-gray-300 hover:text-white transition-colors">

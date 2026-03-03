@@ -16,6 +16,7 @@ import { HelpNotification } from './HelpNotification';
 import { FloatingActions } from './FloatingActions';
 import { QuickCall } from './QuickCall';
 import { PhoneDialer } from './PhoneDialer';
+import { LOGO_SRC } from '../lib/assets';
 
 type View = 'dashboard' | 'crm' | 'projects' | 'leads' | 'calendar' | 'timeTracking' | 'messages' | 'meetings' | 'callReports' | 'employees' | 'agentDashboards';
 
@@ -97,7 +98,7 @@ export function CRM() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <img
-                  src="/NEW_sthillstudisoslogo.png"
+                  src={LOGO_SRC}
                   alt="SthillStudios Logo"
                   className="w-40 h-auto"
                 />

@@ -1,1 +1,3 @@
-export const LOGO_SRC = `${import.meta.env.BASE_URL}NEW_sthillstudisoslogo.png`;
+import logoSrc from '../assets/NEW_sthillstudisoslogo.png';
+
+export const LOGO_SRC = logoSrc;
