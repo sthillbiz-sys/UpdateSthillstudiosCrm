@@ -23,6 +23,34 @@ export function Messages() {
   const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
   const [messageInput, setMessageInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [conversations, setConversations] = useState<Conversation[]>([
+    {
+      id: '1',
+      name: 'Team General',
+      lastMessage: 'Great work on the project!',
+      timestamp: '2m ago',
+      unread: 2,
+      avatar: 'TG',
+    },
+  ]);
+  const [conversationMessages, setConversationMessages] = useState<Record<string, Message[]>>({
+    '1': [
+      {
+        id: '1',
+        sender: 'John Doe',
+        content: 'Hey team, how is everyone doing?',
+        timestamp: '10:30 AM',
+        isOwn: false,
+      },
+      {
+        id: '2',
+        sender: 'You',
+        content: 'Great work on the project!',
+        timestamp: '10:32 AM',
+        isOwn: true,
+      },
+    ],
+  });
   const { teamPresence } = usePresence();
 
   const getStatusColor = (status: string) => {
@@ -65,41 +93,44 @@ export function Messages() {
     }
   };
 
-  const conversations: Conversation[] = [
-    {
-      id: '1',
-      name: 'Team General',
-      lastMessage: 'Great work on the project!',
-      timestamp: '2m ago',
-      unread: 2,
-      avatar: 'TG',
-    },
-  ];
-
-  const messages: Message[] = selectedConversation
-    ? [
-        {
-          id: '1',
-          sender: 'John Doe',
-          content: 'Hey team, how is everyone doing?',
-          timestamp: '10:30 AM',
-          isOwn: false,
-        },
-        {
-          id: '2',
-          sender: 'You',
-          content: 'Great work on the project!',
-          timestamp: '10:32 AM',
-          isOwn: true,
-        },
-      ]
-    : [];
+  const messages: Message[] = selectedConversation ? conversationMessages[selectedConversation] || [] : [];
 
   const handleSendMessage = () => {
-    if (messageInput.trim()) {
-      setMessageInput('');
-    }
+    const content = messageInput.trim();
+    if (!content || !selectedConversation) return;
+
+    const now = new Date();
+    const timestamp = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const newMessage: Message = {
+      id: `${Date.now()}`,
+      sender: 'You',
+      content,
+      timestamp,
+      isOwn: true,
+    };
+
+    setConversationMessages((prev) => ({
+      ...prev,
+      [selectedConversation]: [...(prev[selectedConversation] || []), newMessage],
+    }));
+    setConversations((prev) =>
+      prev.map((conversation) =>
+        conversation.id === selectedConversation
+          ? {
+              ...conversation,
+              lastMessage: content,
+              timestamp: 'Just now',
+              unread: 0,
+            }
+          : conversation,
+      ),
+    );
+    setMessageInput('');
   };
+
+  const filteredConversations = conversations.filter((conversation) =>
+    conversation.name.toLowerCase().includes(searchQuery.toLowerCase()),
+  );
 
   return (
     <div className="flex h-[calc(100vh-4rem)] bg-gray-100">
@@ -118,7 +149,9 @@ export function Messages() {
                   />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-gray-900 truncate">Team Member</p>
+                  <p className="text-xs font-medium text-gray-900 truncate">
+                    {member.name || member.employee?.full_name || 'Team Member'}
+                  </p>
                   <p className="text-[10px] text-gray-600">{getStatusLabel(member.status)}</p>
                 </div>
               </div>
@@ -148,7 +181,7 @@ export function Messages() {
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {conversations.map((conv) => (
+          {filteredConversations.map((conv) => (
             <button
               key={conv.id}
               onClick={() => setSelectedConversation(conv.id)}

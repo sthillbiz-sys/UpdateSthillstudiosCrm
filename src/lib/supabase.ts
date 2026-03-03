@@ -5,12 +5,23 @@ type SupabaseResult<T = any> = { data: T; error: any; count?: number | null };
 type Filter = { op: 'eq' | 'neq' | 'gte' | 'lte' | 'in'; column: string; value: any };
 type OrderBy = { column: string; ascending: boolean };
 
+function normalizeRole(value: any): 'admin' | 'agent' | 'employee' {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase();
+  if (normalized.includes('admin')) return 'admin';
+  if (normalized.includes('agent')) return 'agent';
+  return 'employee';
+}
+
 function tableToRoute(table: string): string {
   switch (table) {
     case 'calendar_notes':
       return '/calendar-notes';
     case 'shift_entries':
       return '/shift-entries';
+    case 'break_entries':
+      return '/break-entries';
     case 'call_history':
       return '/calls';
     case 'user_presence':
@@ -52,7 +63,7 @@ function normalizeEmployeeRow(row: any) {
     name: fullName,
     phone,
     contact_info: phone,
-    role: row?.role || 'employee',
+    role: normalizeRole(row?.role),
     status: row?.status || 'active',
     assigned_color: row?.assigned_color || '#3B82F6',
   };
@@ -78,6 +89,31 @@ function normalizeEmployeePayload(payload: any) {
     delete mapped.id;
   }
   return mapped;
+}
+
+function mapPayloadForTable(table: string, payload: any) {
+  if (!payload || typeof payload !== 'object') {
+    return payload;
+  }
+
+  if (table === 'employees') {
+    return normalizeEmployeePayload(payload);
+  }
+
+  if (table === 'leads') {
+    const mapped = { ...payload } as Record<string, any>;
+    if (Object.prototype.hasOwnProperty.call(mapped, 'assigned_to')) {
+      const assigned = mapped.assigned_to;
+      mapped.created_by_user_id =
+        assigned === '' || assigned === null || assigned === undefined
+          ? null
+          : Number(assigned);
+      delete mapped.assigned_to;
+    }
+    return mapped;
+  }
+
+  return payload;
 }
 
 class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
@@ -227,7 +263,45 @@ class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
           ...row,
           created_at: row.created_at || row.timestamp || row.date || new Date().toISOString(),
           date: row.date || row.timestamp || row.created_at || new Date().toISOString(),
+          assigned_to:
+            row.assigned_to !== undefined && row.assigned_to !== null && row.assigned_to !== ''
+              ? String(row.assigned_to)
+              : row.created_by_user_id !== undefined &&
+                  row.created_by_user_id !== null &&
+                  row.created_by_user_id !== ''
+                ? String(row.created_by_user_id)
+                : null,
         }));
+        return this.finalizeResult(mapped);
+      }
+      if (this.table === 'meetings') {
+        const mapped = rows.map((row) => {
+          let attendees: string[] = [];
+          if (Array.isArray(row.attendees)) {
+            attendees = row.attendees.map((item: any) => String(item)).filter(Boolean);
+          } else if (typeof row.attendees_json === 'string' && row.attendees_json.trim() !== '') {
+            try {
+              const parsed = JSON.parse(row.attendees_json);
+              if (Array.isArray(parsed)) {
+                attendees = parsed.map((item: any) => String(item)).filter(Boolean);
+              }
+            } catch {
+              attendees = [];
+            }
+          }
+          return {
+            ...row,
+            attendees,
+            assigned_to:
+              row.assigned_to !== undefined && row.assigned_to !== null && row.assigned_to !== ''
+                ? String(row.assigned_to)
+                : row.created_by_user_id !== undefined &&
+                    row.created_by_user_id !== null &&
+                    row.created_by_user_id !== ''
+                  ? String(row.created_by_user_id)
+                  : null,
+          };
+        });
         return this.finalizeResult(mapped);
       }
       if (this.table === 'contacts') {
@@ -266,7 +340,7 @@ class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
   private async executeInsert(): Promise<SupabaseResult<any>> {
     try {
       const rawPayload = Array.isArray(this.payload) ? this.payload[0] : this.payload;
-      const payload = this.table === 'employees' ? normalizeEmployeePayload(rawPayload) : rawPayload;
+      const payload = mapPayloadForTable(this.table, rawPayload);
       const data = await apiPost<any>(tableToRoute(this.table), payload);
       return this.finalizeMutationResult(data);
     } catch (error) {
@@ -280,7 +354,7 @@ class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
       if (id === undefined || id === null) {
         return { data: null, error: new Error('Missing id filter for update') };
       }
-      const payload = this.table === 'employees' ? normalizeEmployeePayload(this.payload) : this.payload;
+      const payload = mapPayloadForTable(this.table, this.payload);
       const data = await apiPut<any>(`${tableToRoute(this.table)}/${id}`, payload);
       return this.finalizeMutationResult(data);
     } catch (error) {

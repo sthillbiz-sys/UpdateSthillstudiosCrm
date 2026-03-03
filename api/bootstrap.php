@@ -295,6 +295,34 @@ function seed_initial_data(): void {
     $stmt->execute([$adminName, $adminEmail, $hashed, 'admin']);
 }
 
+function ensure_runtime_schema(): void {
+    static $ensured = false;
+    if ($ensured) {
+        return;
+    }
+    $ensured = true;
+
+    $pdo = db();
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS break_entries (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            shift_id INT NULL,
+            break_start DATETIME NOT NULL,
+            break_end DATETIME NULL,
+            duration_minutes INT NOT NULL DEFAULT 0,
+            break_type VARCHAR(64) NOT NULL DEFAULT "15-minute",
+            status VARCHAR(32) NOT NULL DEFAULT "in_progress",
+            notes TEXT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX break_entries_user_id_idx (user_id),
+            INDEX break_entries_shift_id_idx (shift_id),
+            INDEX break_entries_status_idx (status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+    );
+}
+
 function xml_escape(string $value): string {
     return htmlspecialchars($value, ENT_XML1 | ENT_QUOTES, 'UTF-8');
 }

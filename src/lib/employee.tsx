@@ -30,12 +30,21 @@ interface EmployeeContextType {
 
 const EmployeeContext = createContext<EmployeeContextType | undefined>(undefined);
 
+function normalizeRole(value: unknown): Employee['role'] {
+  const role = String(value ?? '')
+    .trim()
+    .toLowerCase();
+  if (role.includes('admin')) return 'admin';
+  if (role.includes('agent')) return 'agent';
+  return 'employee';
+}
+
 function mapEmployee(row: any): Employee {
   return {
     id: String(row?.id ?? ''),
     email: row?.email || '',
     full_name: row?.full_name || row?.name || '',
-    role: (row?.role || 'employee') as Employee['role'],
+    role: normalizeRole(row?.role),
     assigned_color: row?.assigned_color || '#3B82F6',
     phone: row?.phone || row?.contact_info || '',
     department: row?.department,
@@ -78,7 +87,7 @@ export function EmployeeProvider({ children }: { children: ReactNode }) {
           id: String(user.id),
           email: user.email,
           full_name: user.name || user.email.split('@')[0],
-          role: (user.role || 'employee') as Employee['role'],
+          role: normalizeRole(user.role),
           assigned_color: '#3B82F6',
           status: 'active',
           created_at: new Date().toISOString(),
@@ -110,7 +119,7 @@ export function EmployeeProvider({ children }: { children: ReactNode }) {
     refreshAllEmployees();
   }, [user]);
 
-  const isAdmin = (currentEmployee?.role || user?.role || 'employee') === 'admin';
+  const isAdmin = normalizeRole(currentEmployee?.role || user?.role || 'employee') === 'admin';
 
   return (
     <EmployeeContext.Provider

@@ -84,6 +84,37 @@ export function CallReports() {
     return `${hours}h ${mins}m`;
   };
 
+  const handleExportReport = () => {
+    const headers = ['Agent', 'Contact', 'Phone', 'DurationMinutes', 'Outcome', 'CalledAt', 'Notes'];
+    const rows = reports.map((report) => [
+      report.user_email || '',
+      report.contact_name || '',
+      report.contact_phone || '',
+      String(report.duration || 0),
+      report.outcome || '',
+      report.called_at || '',
+      report.notes || '',
+    ]);
+    const csvContent = [headers, ...rows]
+      .map((row) =>
+        row
+          .map((cell) => `"${String(cell).replace(/"/g, '""')}"`)
+          .join(','),
+      )
+      .join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    link.href = url;
+    link.download = `call-reports-${filter}-${timestamp}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   if (loading) {
     return (
       <div className="p-8">
@@ -102,7 +133,10 @@ export function CallReports() {
           <h1 className="text-2xl font-bold text-slate-900 mb-1">Call Reports</h1>
           <p className="text-sm text-gray-600">Track call activity and performance</p>
         </div>
-        <button className="flex items-center gap-2 border border-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors">
+        <button
+          onClick={handleExportReport}
+          className="flex items-center gap-2 border border-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors"
+        >
           <Download className="w-4 h-4" />
           Export Report
         </button>

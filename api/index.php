@@ -10,6 +10,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
 }
 
 try {
+    ensure_runtime_schema();
     seed_initial_data();
 } catch (Throwable $e) {
     json_response(['error' => 'Database unavailable', 'details' => $e->getMessage()], 500);
@@ -607,6 +608,72 @@ try {
         json_response($rows);
     }
 
+    if ($route === 'projects' && $method === 'POST') {
+        $input = read_json_body();
+        $name = trim((string) ($input['name'] ?? ''));
+        if ($name === '') {
+            json_response(['error' => 'Project name is required'], 400);
+        }
+
+        $description = trim((string) ($input['description'] ?? ''));
+        $status = strtolower(trim((string) ($input['status'] ?? 'active'))) ?: 'active';
+
+        $stmt = db()->prepare('INSERT INTO projects (name, description, status) VALUES (?, ?, ?)');
+        $stmt->execute([
+            $name,
+            $description !== '' ? $description : null,
+            $status,
+        ]);
+
+        $id = (int) db()->lastInsertId();
+        $select = db()->prepare('SELECT * FROM projects WHERE id = ? LIMIT 1');
+        $select->execute([$id]);
+        $row = $select->fetch();
+        json_response(['id' => $id, 'row' => $row, 'data' => $row]);
+    }
+
+    if (preg_match('#^projects/(\d+)$#', $route, $matches) === 1 && $method === 'PUT') {
+        $id = (int) $matches[1];
+        $input = read_json_body();
+
+        $fields = [];
+        $params = [];
+        if (array_key_exists('name', $input)) {
+            $name = trim((string) ($input['name'] ?? ''));
+            if ($name === '') {
+                json_response(['error' => 'Project name cannot be empty'], 400);
+            }
+            $fields[] = 'name = ?';
+            $params[] = $name;
+        }
+        if (array_key_exists('description', $input)) {
+            $fields[] = 'description = ?';
+            $description = trim((string) ($input['description'] ?? ''));
+            $params[] = $description !== '' ? $description : null;
+        }
+        if (array_key_exists('status', $input)) {
+            $fields[] = 'status = ?';
+            $status = strtolower(trim((string) ($input['status'] ?? 'active')));
+            $params[] = $status !== '' ? $status : 'active';
+        }
+        if (count($fields) === 0) {
+            json_response(['error' => 'No updatable fields provided'], 400);
+        }
+
+        $params[] = $id;
+        $stmt = db()->prepare('UPDATE projects SET ' . implode(', ', $fields) . ' WHERE id = ?');
+        $stmt->execute($params);
+
+        if ($stmt->rowCount() === 0) {
+            json_response(['error' => 'Project not found'], 404);
+        }
+
+        $select = db()->prepare('SELECT * FROM projects WHERE id = ? LIMIT 1');
+        $select->execute([$id]);
+        $row = $select->fetch();
+        json_response(['success' => true, 'row' => $row, 'data' => $row]);
+    }
+
     if (preg_match('#^projects/(\d+)$#', $route, $matches) === 1 && $method === 'DELETE') {
         $id = (int) $matches[1];
         $stmt = db()->prepare('DELETE FROM projects WHERE id = ?');
@@ -982,6 +1049,128 @@ try {
         json_response(['success' => true]);
     }
 
+    if ($route === 'break-entries' && $method === 'GET') {
+        $requestedUserId = isset($_GET['user_id']) ? (int) $_GET['user_id'] : $authUserId;
+        $targetUserId = $requestedUserId > 0 ? $requestedUserId : $authUserId;
+        if (!$canViewAllCalls && $targetUserId !== $authUserId) {
+            json_response(['error' => 'Forbidden'], 403);
+        }
+
+        $where = ['user_id = ?'];
+        $params = [$targetUserId];
+        if (isset($_GET['shift_id']) && $_GET['shift_id'] !== '') {
+            $where[] = 'shift_id = ?';
+            $params[] = (int) $_GET['shift_id'];
+        }
+        if (isset($_GET['status']) && trim((string) $_GET['status']) !== '') {
+            $where[] = 'status = ?';
+            $params[] = trim((string) $_GET['status']);
+        }
+
+        $sql = 'SELECT * FROM break_entries WHERE ' . implode(' AND ', $where) . ' ORDER BY break_start DESC LIMIT 200';
+        $stmt = db()->prepare($sql);
+        $stmt->execute($params);
+        $rows = $stmt->fetchAll();
+        json_response($rows);
+    }
+
+    if ($route === 'break-entries' && $method === 'POST') {
+        $input = read_json_body();
+        $userId = isset($input['user_id']) ? (int) $input['user_id'] : $authUserId;
+        if ($userId <= 0) {
+            json_response(['error' => 'Invalid user'], 400);
+        }
+        if (!$canViewAllCalls && $userId !== $authUserId) {
+            json_response(['error' => 'Forbidden'], 403);
+        }
+
+        $breakStart = trim((string) ($input['break_start'] ?? gmdate('Y-m-d H:i:s')));
+        if ($breakStart === '') {
+            $breakStart = gmdate('Y-m-d H:i:s');
+        }
+
+        $stmt = db()->prepare(
+            'INSERT INTO break_entries (user_id, shift_id, break_start, break_end, duration_minutes, break_type, status, notes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        $stmt->execute([
+            $userId,
+            isset($input['shift_id']) && $input['shift_id'] !== '' ? (int) $input['shift_id'] : null,
+            $breakStart,
+            trim((string) ($input['break_end'] ?? '')) ?: null,
+            isset($input['duration_minutes']) ? (int) $input['duration_minutes'] : 0,
+            trim((string) ($input['break_type'] ?? '15-minute')) ?: '15-minute',
+            trim((string) ($input['status'] ?? 'in_progress')) ?: 'in_progress',
+            trim((string) ($input['notes'] ?? '')) ?: null,
+        ]);
+
+        $id = (int) db()->lastInsertId();
+        $select = db()->prepare('SELECT * FROM break_entries WHERE id = ? LIMIT 1');
+        $select->execute([$id]);
+        $row = $select->fetch();
+        json_response(['id' => $id, 'row' => $row, 'data' => $row]);
+    }
+
+    if (preg_match('#^break-entries/(\d+)$#', $route, $matches) === 1 && $method === 'PUT') {
+        $id = (int) $matches[1];
+        $input = read_json_body();
+
+        $check = db()->prepare('SELECT user_id FROM break_entries WHERE id = ? LIMIT 1');
+        $check->execute([$id]);
+        $existing = $check->fetch();
+        if (!$existing) {
+            json_response(['error' => 'Break entry not found'], 404);
+        }
+        $ownerUserId = (int) ($existing['user_id'] ?? 0);
+        if (!$canViewAllCalls && $ownerUserId !== $authUserId) {
+            json_response(['error' => 'Forbidden'], 403);
+        }
+
+        $stmt = db()->prepare(
+            'UPDATE break_entries
+             SET break_start = COALESCE(?, break_start),
+                 break_end = COALESCE(?, break_end),
+                 duration_minutes = COALESCE(?, duration_minutes),
+                 break_type = COALESCE(?, break_type),
+                 status = COALESCE(?, status),
+                 notes = COALESCE(?, notes),
+                 updated_at = NOW()
+             WHERE id = ?'
+        );
+        $stmt->execute([
+            trim((string) ($input['break_start'] ?? '')) ?: null,
+            trim((string) ($input['break_end'] ?? '')) ?: null,
+            array_key_exists('duration_minutes', $input) ? (int) $input['duration_minutes'] : null,
+            trim((string) ($input['break_type'] ?? '')) ?: null,
+            trim((string) ($input['status'] ?? '')) ?: null,
+            array_key_exists('notes', $input) ? (trim((string) $input['notes']) ?: null) : null,
+            $id,
+        ]);
+
+        $select = db()->prepare('SELECT * FROM break_entries WHERE id = ? LIMIT 1');
+        $select->execute([$id]);
+        $row = $select->fetch();
+        json_response(['success' => true, 'row' => $row, 'data' => $row]);
+    }
+
+    if (preg_match('#^break-entries/(\d+)$#', $route, $matches) === 1 && $method === 'DELETE') {
+        $id = (int) $matches[1];
+        $check = db()->prepare('SELECT user_id FROM break_entries WHERE id = ? LIMIT 1');
+        $check->execute([$id]);
+        $existing = $check->fetch();
+        if (!$existing) {
+            json_response(['error' => 'Break entry not found'], 404);
+        }
+        $ownerUserId = (int) ($existing['user_id'] ?? 0);
+        if (!$canViewAllCalls && $ownerUserId !== $authUserId) {
+            json_response(['error' => 'Forbidden'], 403);
+        }
+
+        $stmt = db()->prepare('DELETE FROM break_entries WHERE id = ?');
+        $stmt->execute([$id]);
+        json_response(['success' => true]);
+    }
+
     if ($route === 'leads' && $method === 'GET') {
         $rows = db()->query('SELECT * FROM leads ORDER BY timestamp DESC')->fetchAll();
         json_response($rows);
@@ -1025,6 +1214,11 @@ try {
         if (array_key_exists('source', $input)) {
             $fields[] = 'source = ?';
             $params[] = trim((string) ($input['source'] ?? 'manual')) ?: 'manual';
+        }
+        if (array_key_exists('created_by_user_id', $input)) {
+            $fields[] = 'created_by_user_id = ?';
+            $createdBy = $input['created_by_user_id'];
+            $params[] = $createdBy === '' || $createdBy === null ? null : (int) $createdBy;
         }
         if (count($fields) === 0) {
             json_response(['error' => 'No updatable fields provided'], 400);

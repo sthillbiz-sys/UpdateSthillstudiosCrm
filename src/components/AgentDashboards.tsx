@@ -21,6 +21,12 @@ interface AgentStats {
   revenue: number;
 }
 
+interface AgentDashboardDetails {
+  leads: Array<{ id: string; name?: string; email?: string; source?: string; date?: string; created_at?: string }>;
+  calls: Array<{ id: string; contact_name?: string; contact_phone?: string; outcome?: string; called_at?: string; duration?: number }>;
+  meetings: Array<{ id: string; title?: string; scheduled_date?: string; scheduled_time?: string; status?: string }>;
+}
+
 export function AgentDashboards() {
   const { user } = useAuth();
   const { isAdmin, allEmployees } = useEmployee();
@@ -28,6 +34,8 @@ export function AgentDashboards() {
   const [onlinePresence, setOnlinePresence] = useState<Record<string, boolean>>({});
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [agentStats, setAgentStats] = useState<Record<string, AgentStats>>({});
+  const [agentDetails, setAgentDetails] = useState<Record<string, AgentDashboardDetails>>({});
+  const [loadingDetails, setLoadingDetails] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -136,6 +144,57 @@ export function AgentDashboards() {
 
   const getInitials = (name: string) => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+  };
+
+  const loadAgentDetails = async (agentId: string) => {
+    setLoadingDetails(true);
+    try {
+      const [leadsRes, callsRes, meetingsRes] = await Promise.all([
+        supabase
+          .from('leads')
+          .select('*')
+          .eq('assigned_to', agentId)
+          .order('created_at', { ascending: false })
+          .limit(8),
+        supabase
+          .from('call_history')
+          .select('*')
+          .eq('user_id', agentId)
+          .order('called_at', { ascending: false })
+          .limit(8),
+        supabase
+          .from('meetings')
+          .select('*')
+          .eq('assigned_to', agentId)
+          .order('scheduled_date', { ascending: false })
+          .order('scheduled_time', { ascending: false })
+          .limit(8),
+      ]);
+
+      setAgentDetails((prev) => ({
+        ...prev,
+        [agentId]: {
+          leads: leadsRes.data || [],
+          calls: callsRes.data || [],
+          meetings: meetingsRes.data || [],
+        },
+      }));
+    } catch (error) {
+      console.error('Error loading agent details:', error);
+      setAgentDetails((prev) => ({
+        ...prev,
+        [agentId]: { leads: [], calls: [], meetings: [] },
+      }));
+    } finally {
+      setLoadingDetails(false);
+    }
+  };
+
+  const handleOpenAgentDashboard = async (agentId: string) => {
+    setSelectedAgent(agentId);
+    if (!agentDetails[agentId]) {
+      await loadAgentDetails(agentId);
+    }
   };
 
   if (!isAdmin) {
@@ -291,7 +350,7 @@ export function AgentDashboards() {
                   </div>
 
                   <button
-                    onClick={() => setSelectedAgent(agent.id)}
+                    onClick={() => void handleOpenAgentDashboard(agent.id)}
                     className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                   >
                     <Eye className="w-4 h-4" />
@@ -323,12 +382,86 @@ export function AgentDashboards() {
             </div>
 
             <div className="p-6">
-              <div className="bg-gray-50 rounded-lg p-8 text-center">
-                <p className="text-gray-600">Detailed dashboard view coming soon...</p>
-                <p className="text-sm text-gray-500 mt-2">
-                  This will show comprehensive analytics, activity logs, and performance metrics for this agent.
-                </p>
-              </div>
+              {loadingDetails ? (
+                <div className="animate-pulse space-y-4">
+                  <div className="h-24 bg-gray-100 rounded-lg"></div>
+                  <div className="h-48 bg-gray-100 rounded-lg"></div>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div className="bg-blue-50 rounded-lg p-4">
+                      <p className="text-xs uppercase text-blue-700 font-semibold mb-1">Assigned Leads</p>
+                      <p className="text-2xl font-bold text-slate-900">
+                        {agentStats[selectedAgent]?.totalLeads || 0}
+                      </p>
+                    </div>
+                    <div className="bg-green-50 rounded-lg p-4">
+                      <p className="text-xs uppercase text-green-700 font-semibold mb-1">Completed Calls</p>
+                      <p className="text-2xl font-bold text-slate-900">
+                        {agentStats[selectedAgent]?.completedCalls || 0}
+                      </p>
+                    </div>
+                    <div className="bg-purple-50 rounded-lg p-4">
+                      <p className="text-xs uppercase text-purple-700 font-semibold mb-1">Scheduled Meetings</p>
+                      <p className="text-2xl font-bold text-slate-900">
+                        {agentStats[selectedAgent]?.scheduledMeetings || 0}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                    <div className="bg-gray-50 rounded-lg p-4">
+                      <h3 className="font-semibold text-slate-900 mb-3">Recent Leads</h3>
+                      <div className="space-y-2">
+                        {(agentDetails[selectedAgent]?.leads || []).slice(0, 6).map((lead) => (
+                          <div key={lead.id} className="bg-white rounded border border-gray-200 p-2">
+                            <p className="text-sm font-medium text-slate-900">{lead.name || 'Unnamed lead'}</p>
+                            <p className="text-xs text-gray-500">{lead.email || lead.source || 'No details'}</p>
+                          </div>
+                        ))}
+                        {(agentDetails[selectedAgent]?.leads || []).length === 0 && (
+                          <p className="text-sm text-gray-500">No leads assigned.</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="bg-gray-50 rounded-lg p-4">
+                      <h3 className="font-semibold text-slate-900 mb-3">Recent Calls</h3>
+                      <div className="space-y-2">
+                        {(agentDetails[selectedAgent]?.calls || []).slice(0, 6).map((call) => (
+                          <div key={call.id} className="bg-white rounded border border-gray-200 p-2">
+                            <p className="text-sm font-medium text-slate-900">{call.contact_name || 'Unknown contact'}</p>
+                            <p className="text-xs text-gray-500">
+                              {call.contact_phone || 'No phone'} • {call.outcome || 'completed'}
+                            </p>
+                          </div>
+                        ))}
+                        {(agentDetails[selectedAgent]?.calls || []).length === 0 && (
+                          <p className="text-sm text-gray-500">No calls logged.</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="bg-gray-50 rounded-lg p-4">
+                      <h3 className="font-semibold text-slate-900 mb-3">Upcoming Meetings</h3>
+                      <div className="space-y-2">
+                        {(agentDetails[selectedAgent]?.meetings || []).slice(0, 6).map((meeting) => (
+                          <div key={meeting.id} className="bg-white rounded border border-gray-200 p-2">
+                            <p className="text-sm font-medium text-slate-900">{meeting.title || 'Untitled meeting'}</p>
+                            <p className="text-xs text-gray-500">
+                              {meeting.scheduled_date || 'No date'} {meeting.scheduled_time || ''} • {meeting.status || 'scheduled'}
+                            </p>
+                          </div>
+                        ))}
+                        {(agentDetails[selectedAgent]?.meetings || []).length === 0 && (
+                          <p className="text-sm text-gray-500">No meetings assigned.</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
