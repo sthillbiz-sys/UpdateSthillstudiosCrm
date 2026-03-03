@@ -1,6 +1,5 @@
 import { useState, type FormEvent } from 'react';
 import { useAuth } from '../lib/auth';
-import { LOGO_SRC } from '../lib/assets';
 import { Building2, AlertCircle } from 'lucide-react';
 
 export function Auth() {
@@ -39,7 +38,7 @@ export function Auth() {
       <div className="w-full max-w-md">
         <div className="flex flex-col items-center mb-8">
           <img
-            src={LOGO_SRC}
+            src="/NEW_sthillstudisoslogo.png"
             alt="SthillStudios Logo"
             className="w-48 h-auto mb-4"
           />

@@ -1,4 +1,5 @@
 import { AuthProvider, useAuth } from './lib/auth';
+import { EmployeeProvider } from './lib/employee';
 import { PresenceProvider } from './lib/presence';
 import { Auth } from './components/Auth';
 import { CRM } from './components/CRM';
@@ -18,18 +19,20 @@ function AppContent() {
   }
 
   return user ? (
-    <PresenceProvider>
-      <CRM />
-    </PresenceProvider>
-  ) : (
-    <Auth />
-  );
+    <EmployeeProvider>
+      <PresenceProvider>
+        <CRM />
+      </PresenceProvider>
+    </EmployeeProvider>
+  ) : <Auth />;
 }
 
-export default function App() {
+function App() {
   return (
     <AuthProvider>
       <AppContent />
     </AuthProvider>
   );
 }
+
+export default App;

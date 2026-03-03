@@ -1,10 +1,7 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Phone, Settings, Trash2, HelpCircle, X, Video, Mic, Users, History, User, Delete, GripVertical } from 'lucide-react';
-import { Device } from '@twilio/voice-sdk';
 import { usePresence } from '../lib/presence';
 import { useAuth } from '../lib/auth';
-import { apiPost } from '../lib/api';
-import { LOGO_SRC } from '../lib/assets';
 
 interface PhoneDialerProps {
   onClose?: () => void;
@@ -13,14 +10,10 @@ interface PhoneDialerProps {
 export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [activeTab, setActiveTab] = useState<'dialer' | 'team'>('dialer');
-  const [callState, setCallState] = useState<'idle' | 'connecting' | 'ringing' | 'in-call' | 'ending' | 'error'>('idle');
-  const [callError, setCallError] = useState('');
-  const { teamPresence, myPresence, updatePresence, setOnCall } = usePresence();
+  const { teamPresence, myPresence, updatePresence } = usePresence();
   const { user } = useAuth();
   const [position, setPosition] = useState({ x: 20, y: 20 });
   const dialerRef = useRef<HTMLDivElement>(null);
-  const twilioDeviceRef = useRef<Device | null>(null);
-  const twilioCallRef = useRef<any>(null);
 
   const userName = user?.email?.split('@')[0] || 'Agent';
   const formattedName = userName.split('.').map((n: string) => n.charAt(0).toUpperCase() + n.slice(1)).join(' ');
@@ -41,125 +34,6 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
     if (num.length <= 6) return num.slice(0, 3) + '-' + num.slice(3).padEnd(3, '0') + '-0000';
     return num.slice(0, 3) + '-' + num.slice(3, 6) + '-' + num.slice(6).padEnd(4, '0');
   };
-
-  const normalizeUsDialNumber = (input: string): string | null => {
-    const digits = input.replace(/\D/g, '');
-    if (!digits) return null;
-    const national = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
-    if (!/^\d{10}$/.test(national)) return null;
-    if (!/^[2-9]\d{2}[2-9]\d{6}$/.test(national)) return null;
-    return `+1${national}`;
-  };
-
-  const fetchTwilioAccessToken = useCallback(async (): Promise<string> => {
-    const data = await apiPost<{ token: string }>('/twilio/access-token', {});
-    if (!data?.token) {
-      throw new Error('Unable to get Twilio access token');
-    }
-    return data.token;
-  }, []);
-
-  const ensureTwilioDevice = useCallback(async (): Promise<Device> => {
-    const token = await fetchTwilioAccessToken();
-    if (twilioDeviceRef.current) {
-      await twilioDeviceRef.current.updateToken(token);
-      return twilioDeviceRef.current;
-    }
-
-    const device = new Device(token, { logLevel: 1 });
-    twilioDeviceRef.current = device;
-
-    device.on('tokenWillExpire', async () => {
-      try {
-        const nextToken = await fetchTwilioAccessToken();
-        await device.updateToken(nextToken);
-      } catch {
-        // ignore refresh failures; next call will request fresh token.
-      }
-    });
-
-    device.on('error', (error: any) => {
-      setCallError(error?.message || 'Twilio device error');
-      setCallState('error');
-      void setOnCall(false);
-    });
-
-    return device;
-  }, [fetchTwilioAccessToken, setOnCall]);
-
-  const endCall = useCallback(() => {
-    const activeCall = twilioCallRef.current;
-    if (!activeCall) {
-      setCallState('idle');
-      return;
-    }
-    setCallState('ending');
-    try {
-      activeCall.disconnect();
-    } catch {
-      setCallState('idle');
-    }
-  }, []);
-
-  const startCall = useCallback(async () => {
-    if (callState !== 'idle' && callState !== 'error') {
-      return;
-    }
-
-    const normalized = normalizeUsDialNumber(phoneNumber);
-    if (!normalized) {
-      setCallError('Enter a valid US phone number (10 digits).');
-      return;
-    }
-
-    try {
-      setCallError('');
-      setCallState('connecting');
-      const device = await ensureTwilioDevice();
-      const call = await device.connect({ params: { To: normalized } });
-      twilioCallRef.current = call;
-      setPhoneNumber(normalized);
-
-      const finalize = () => {
-        twilioCallRef.current = null;
-        setCallState('idle');
-        setPhoneNumber('');
-        void setOnCall(false);
-      };
-
-      call.on('ringing', () => setCallState('ringing'));
-      call.on('accept', () => {
-        setCallState('in-call');
-        void setOnCall(true);
-      });
-      call.on('disconnect', finalize);
-      call.on('cancel', finalize);
-      call.on('reject', finalize);
-      call.on('error', (error: any) => {
-        setCallError(error?.message || 'Call failed.');
-        finalize();
-      });
-    } catch (error: any) {
-      setCallError(error?.message || 'Unable to start call.');
-      setCallState('error');
-      void setOnCall(false);
-    }
-  }, [callState, ensureTwilioDevice, phoneNumber, setOnCall]);
-
-  useEffect(() => {
-    return () => {
-      try {
-        twilioCallRef.current?.disconnect();
-      } catch {
-        // noop
-      }
-      twilioCallRef.current = null;
-      if (twilioDeviceRef.current) {
-        twilioDeviceRef.current.destroy();
-        twilioDeviceRef.current = null;
-      }
-    };
-  }, []);
 
   const buttons = [
     { num: '1', letters: '' },
@@ -231,7 +105,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
                 <img
-                  src={LOGO_SRC}
+                  src="/NEW_sthillstudisoslogo.png"
                   alt="SthillStudios"
                   className="h-6 w-auto drop-shadow-lg"
                 />
@@ -279,7 +153,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
               <div className="bg-gradient-to-br from-slate-700 to-slate-800 rounded-xl p-3 shadow-inner border border-slate-600">
                 <div className="flex items-center justify-center mb-1">
                   <img
-                    src={LOGO_SRC}
+                    src="/NEW_sthillstudisoslogo.png"
                     alt="SthillStudios"
                     className="h-4 w-auto opacity-40"
                   />
@@ -313,28 +187,19 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
             <div className="flex items-center justify-center gap-3 mb-3">
               <button
                 onClick={handleClear}
-                disabled={!phoneNumber || callState === 'connecting' || callState === 'ringing' || callState === 'in-call'}
+                disabled={!phoneNumber}
                 className="p-3 bg-gradient-to-br from-slate-700 to-slate-800 hover:from-red-600 hover:to-red-700 disabled:opacity-30 disabled:cursor-not-allowed rounded-lg transition-all shadow-lg border border-slate-600 hover:border-red-500"
               >
                 <Delete className="w-4 h-4 text-white" />
               </button>
               <button
-                onClick={() => {
-                  if (callState === 'connecting' || callState === 'ringing' || callState === 'in-call' || callState === 'ending') {
-                    endCall();
-                    return;
-                  }
-                  void startCall();
-                }}
-                disabled={!phoneNumber && callState === 'idle'}
+                disabled={!phoneNumber}
                 className="relative p-4 bg-gradient-to-br from-green-500 to-green-600 hover:from-green-400 hover:to-green-500 disabled:from-slate-700 disabled:to-slate-800 disabled:cursor-not-allowed text-white rounded-full transition-all shadow-2xl active:scale-95 border-2 border-green-400 disabled:border-slate-600 group"
               >
                 <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent rounded-full group-hover:from-white/30"></div>
                 <Phone className="w-5 h-5 relative z-10" />
               </button>
             </div>
-            {callError && <p className="text-xs text-rose-300 mb-2">{callError}</p>}
-            <p className="text-[10px] text-cyan-300 mb-2 uppercase tracking-wider">Call Status: {callState}</p>
 
             <div className="grid grid-cols-4 gap-2">
               <button className="flex flex-col items-center gap-0.5 p-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg transition-all border border-slate-600">
@@ -437,7 +302,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <img
-                src={LOGO_SRC}
+                src="/NEW_sthillstudisoslogo.png"
                 alt="SthillStudios Logo"
                 className="w-32 h-auto"
               />

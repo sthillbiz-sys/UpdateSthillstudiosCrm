@@ -48,6 +48,29 @@ export function Calendar() {
     loadMonthNotes();
   }, [currentDate]);
 
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://assets.calendly.com/assets/external/widget.js';
+    script.async = true;
+    document.body.appendChild(script);
+
+    return () => {
+      if (document.body.contains(script)) {
+        document.body.removeChild(script);
+      }
+    };
+  }, []);
+
+  const openCalendlyPopup = () => {
+    if ((window as any).Calendly) {
+      (window as any).Calendly.initPopupWidget({
+        url: 'https://calendly.com/thesthillstudios/sthill-studios-website-design-marketing-and-seo-meeting'
+      });
+    }
+    return false;
+  };
+
+
   const loadMonthNotes = async () => {
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
@@ -200,41 +223,19 @@ export function Calendar() {
         )}
 
         {activeTab === 'calendly' && (
-          <div className="p-8 min-h-screen">
-            <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
-              <p className="text-sm text-gray-700 mb-2">
-                <strong>Sthillstudios Meeting Link:</strong>
+          <div className="p-8">
+            <div className="flex flex-col items-center justify-center py-16 space-y-6">
+              <CalendarIcon className="w-24 h-24 text-blue-500" />
+              <h2 className="text-3xl font-bold text-slate-900">Schedule a Meeting</h2>
+              <p className="text-gray-600 text-center max-w-md">
+                Click the button below to open the Calendly scheduler and book your appointment with Sthillstudios.
               </p>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value="https://calendly.com/thesthillstudios/sthill-studios-website-design-marketing-and-seo-meeting"
-                  readOnly
-                  className="flex-1 px-3 py-2 bg-white border border-gray-300 rounded text-xs font-mono"
-                />
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText('https://calendly.com/thesthillstudios/sthill-studios-website-design-marketing-and-seo-meeting');
-                  }}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded transition-colors"
-                >
-                  Copy
-                </button>
-              </div>
-              <p className="text-xs text-gray-600 mt-2">
-                Share this link with customers who want to schedule a meeting to discuss websites and possibly purchase.
-              </p>
-            </div>
-
-            <div className="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden" style={{ minHeight: '700px' }}>
-              <iframe
-                src="https://calendly.com/thesthillstudios/sthill-studios-website-design-marketing-and-seo-meeting?embed_domain=localhost&embed_type=Inline"
-                width="100%"
-                height="700"
-                frameBorder="0"
-                title="Sthillstudios Meeting Scheduling"
-                style={{ border: 'none' }}
-              ></iframe>
+              <button
+                onClick={() => window.open('https://calendly.com/thesthillstudios/sthill-studios-website-design-marketing-and-seo-meeting', '_blank')}
+                className="px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white text-lg font-semibold rounded-lg transition-colors shadow-lg hover:shadow-xl"
+              >
+                Schedule Meeting
+              </button>
             </div>
           </div>
         )}

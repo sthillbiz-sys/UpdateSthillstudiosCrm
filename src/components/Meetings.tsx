@@ -1,8 +1,14 @@
-import { useState, useEffect, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Phone, Video, Plus, X, Calendar as CalendarIcon, Clock, Users, Trash2, ExternalLink } from 'lucide-react';
 import { QuickCall } from './QuickCall';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
+
+declare global {
+  interface Window {
+    JitsiMeetExternalAPI: any;
+  }
+}
 
 interface Meeting {
   id: string;
@@ -19,10 +25,19 @@ interface Meeting {
 }
 
 export function Meetings() {
+  const [activeTab, setActiveTab] = useState<'schedule' | 'join'>('join');
   const [showQuickCall, setShowQuickCall] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [selectedRoomName, setSelectedRoomName] = useState('SthillStudiosMain');
+  const [roomInput, setRoomInput] = useState('');
+  const [inMeeting, setInMeeting] = useState(false);
+  const [jitsiLoaded, setJitsiLoaded] = useState(false);
+  const [jitsiError, setJitsiError] = useState(false);
+  const [audioMuted, setAudioMuted] = useState(false);
+  const [videoMuted, setVideoMuted] = useState(false);
+  const jitsiContainerRef = useRef<HTMLDivElement>(null);
+  const jitsiApiRef = useRef<any>(null);
   const { user } = useAuth();
 
   const [formData, setFormData] = useState({
@@ -37,6 +52,25 @@ export function Meetings() {
 
   useEffect(() => {
     fetchMeetings();
+
+    const checkJitsiLoad = setInterval(() => {
+      if (window.JitsiMeetExternalAPI) {
+        setJitsiLoaded(true);
+        clearInterval(checkJitsiLoad);
+      }
+    }, 100);
+
+    const timeout = setTimeout(() => {
+      clearInterval(checkJitsiLoad);
+      if (!window.JitsiMeetExternalAPI) {
+        setJitsiError(true);
+      }
+    }, 10000);
+
+    return () => {
+      clearInterval(checkJitsiLoad);
+      clearTimeout(timeout);
+    };
   }, []);
 
   const fetchMeetings = async () => {
@@ -101,77 +135,253 @@ export function Meetings() {
     setShowQuickCall(true);
   };
 
+  const startJitsiMeeting = (roomName: string) => {
+    if (!jitsiContainerRef.current) {
+      console.error('Jitsi container not found');
+      return;
+    }
+
+    if (!window.JitsiMeetExternalAPI) {
+      console.error('Jitsi API not loaded');
+      alert('Meeting system is loading. Please try again in a moment.');
+      setInMeeting(false);
+      return;
+    }
+
+    if (jitsiApiRef.current) {
+      jitsiApiRef.current.dispose();
+    }
+
+    try {
+      const domain = 'meet.sthillstudios.com';
+      const options = {
+        roomName: roomName,
+        parentNode: jitsiContainerRef.current,
+        width: '100%',
+        height: '100%',
+        userInfo: {
+          displayName: user?.email?.split('@')[0] || 'User',
+          email: user?.email || '',
+        },
+        configOverwrite: {
+          startWithAudioMuted: false,
+          startWithVideoMuted: false,
+          enableLobby: false,
+        },
+        interfaceConfigOverwrite: {
+          SHOW_JITSI_WATERMARK: false,
+          SHOW_POWERED_BY: false,
+        },
+      };
+
+      jitsiApiRef.current = new window.JitsiMeetExternalAPI(domain, options);
+
+      jitsiApiRef.current.addListener('readyToClose', () => {
+        setInMeeting(false);
+        setAudioMuted(false);
+        setVideoMuted(false);
+        if (jitsiApiRef.current) {
+          jitsiApiRef.current.dispose();
+          jitsiApiRef.current = null;
+        }
+      });
+
+      jitsiApiRef.current.addListener('audioMuteStatusChanged', (data: any) => {
+        setAudioMuted(data.muted);
+      });
+
+      jitsiApiRef.current.addListener('videoMuteStatusChanged', (data: any) => {
+        setVideoMuted(data.muted);
+      });
+    } catch (error) {
+      console.error('Error starting Jitsi meeting:', error);
+      alert('Failed to start meeting. Please try again.');
+      setInMeeting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (inMeeting && selectedRoomName) {
+      startJitsiMeeting(selectedRoomName);
+    }
+
+    return () => {
+      if (jitsiApiRef.current) {
+        jitsiApiRef.current.dispose();
+        jitsiApiRef.current = null;
+      }
+    };
+  }, [inMeeting, selectedRoomName]);
+
   return (
     <>
-      <div className="bg-[#FDF8F3] min-h-screen flex items-center justify-center p-8">
-        <div className="max-w-5xl w-full">
-          <div className="flex items-center justify-between mb-8">
-            <h1 className="text-3xl font-bold text-slate-900">Meetings & Training</h1>
-            <div className="flex gap-3">
+      <div className="bg-[#FDF8F3] min-h-screen p-8">
+        <div className="max-w-5xl mx-auto">
+          <div className="mb-8">
+            <h1 className="text-3xl font-bold text-slate-900 mb-6">Meetings & Training</h1>
+
+            <div className="flex gap-4 border-b border-gray-300 mb-8">
               <button
-                onClick={() => setShowScheduleModal(true)}
-                className="flex items-center gap-2 px-6 py-3 bg-white border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors shadow-sm"
+                onClick={() => setActiveTab('schedule')}
+                className={`px-6 py-3 font-medium transition-colors ${
+                  activeTab === 'schedule'
+                    ? 'text-blue-600 border-b-2 border-blue-600'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
               >
-                <Plus className="w-5 h-5" />
                 Schedule
+              </button>
+              <button
+                onClick={() => setActiveTab('join')}
+                className={`px-6 py-3 font-medium transition-colors ${
+                  activeTab === 'join'
+                    ? 'text-blue-600 border-b-2 border-blue-600'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Join Meeting
               </button>
             </div>
           </div>
 
-          <div className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-2xl shadow-2xl overflow-hidden">
+          {activeTab === 'join' && !inMeeting && (
+            <div className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-2xl shadow-2xl overflow-hidden">
             <div className="p-12">
               <div className="text-center mb-8">
                 <h2 className="text-4xl font-bold text-white mb-4">Join meeting</h2>
-                <h3 className="text-2xl text-gray-300 font-medium">Sthill Studios Main</h3>
+                <h3 className="text-2xl text-gray-300 font-medium">Sthill Studios Team</h3>
               </div>
+
+              {jitsiError && (
+                <div className="bg-yellow-900/50 border border-yellow-600 rounded-lg p-4 mb-6 text-center">
+                  <p className="text-yellow-200 text-sm">
+                    Video conferencing system could not be loaded. The meeting feature requires access to meet.sthillstudios.com.
+                  </p>
+                </div>
+              )}
 
               <div className="max-w-md mx-auto space-y-6">
                 <input
                   type="text"
-                  placeholder="j"
+                  value={roomInput}
+                  onChange={(e) => setRoomInput(e.target.value)}
+                  placeholder="Enter room name or leave blank for main room"
                   className="w-full px-6 py-4 bg-gray-700 text-white placeholder-gray-400 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-lg"
                 />
 
                 <button
                   onClick={() => {
-                    setSelectedRoomName('SthillStudiosMain');
-                    setShowQuickCall(true);
+                    if (!jitsiLoaded) {
+                      alert('Meeting system is still loading. Please wait a moment and try again.');
+                      return;
+                    }
+                    const room = roomInput.trim() || 'SthillStudiosMain';
+                    setSelectedRoomName(room);
+                    setInMeeting(true);
                   }}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white px-6 py-4 rounded-lg font-semibold text-lg transition-colors shadow-lg flex items-center justify-center gap-3"
+                  disabled={!jitsiLoaded && !jitsiError}
+                  className={`w-full px-6 py-4 rounded-lg font-semibold text-lg transition-colors shadow-lg flex items-center justify-center gap-3 ${
+                    !jitsiLoaded && !jitsiError
+                      ? 'bg-gray-400 cursor-not-allowed text-white'
+                      : 'bg-blue-600 hover:bg-blue-700 text-white'
+                  }`}
                 >
-                  Join meeting
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
+                  {!jitsiLoaded && !jitsiError ? (
+                    <>
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      Loading meeting system...
+                    </>
+                  ) : jitsiError ? (
+                    <>
+                      Join meeting (Video disabled)
+                      <Video className="w-6 h-6" />
+                    </>
+                  ) : (
+                    <>
+                      Join meeting
+                      <Video className="w-6 h-6" />
+                    </>
+                  )}
                 </button>
 
-                <div className="flex items-center justify-center gap-6 pt-4">
-                  <button className="flex flex-col items-center gap-2 text-gray-300 hover:text-white transition-colors">
-                    <div className="w-12 h-12 bg-gray-700 rounded-lg flex items-center justify-center hover:bg-gray-600 transition-colors">
-                      <Phone className="w-6 h-6" />
+                <div className="flex items-center justify-center gap-4 pt-4">
+                  <button
+                    onClick={() => {
+                      if (jitsiApiRef.current) {
+                        const newMuted = !audioMuted;
+                        jitsiApiRef.current.executeCommand('toggleAudio');
+                        setAudioMuted(newMuted);
+                      }
+                    }}
+                    className="flex flex-col items-center gap-2 text-gray-300 hover:text-white transition-colors"
+                    title="Toggle Audio"
+                  >
+                    <div className={`w-12 h-12 rounded-lg flex items-center justify-center transition-colors ${
+                      audioMuted ? 'bg-red-600 hover:bg-red-700' : 'bg-gray-700 hover:bg-gray-600'
+                    }`}>
+                      <Phone className="w-5 h-5" />
                     </div>
                   </button>
-                  <button className="flex flex-col items-center gap-2 text-gray-300 hover:text-white transition-colors">
-                    <div className="w-12 h-12 bg-gray-700 rounded-lg flex items-center justify-center hover:bg-gray-600 transition-colors">
-                      <Video className="w-6 h-6" />
+                  <button
+                    onClick={() => {
+                      if (jitsiApiRef.current) {
+                        const newMuted = !videoMuted;
+                        jitsiApiRef.current.executeCommand('toggleVideo');
+                        setVideoMuted(newMuted);
+                      }
+                    }}
+                    className="flex flex-col items-center gap-2 text-gray-300 hover:text-white transition-colors"
+                    title="Toggle Video"
+                  >
+                    <div className={`w-12 h-12 rounded-lg flex items-center justify-center transition-colors ${
+                      videoMuted ? 'bg-red-600 hover:bg-red-700' : 'bg-gray-700 hover:bg-gray-600'
+                    }`}>
+                      <Video className="w-5 h-5" />
                     </div>
                   </button>
-                  <button className="flex flex-col items-center gap-2 text-gray-300 hover:text-white transition-colors">
+                  <button
+                    onClick={() => {
+                      if (jitsiApiRef.current) {
+                        jitsiApiRef.current.executeCommand('toggleTileView');
+                      }
+                    }}
+                    className="flex flex-col items-center gap-2 text-gray-300 hover:text-white transition-colors"
+                    title="Toggle Participants View"
+                  >
                     <div className="w-12 h-12 bg-gray-700 rounded-lg flex items-center justify-center hover:bg-gray-600 transition-colors">
-                      <Users className="w-6 h-6" />
+                      <Users className="w-5 h-5" />
                     </div>
                   </button>
-                  <button className="flex flex-col items-center gap-2 text-gray-300 hover:text-white transition-colors">
+                  <button
+                    onClick={() => {
+                      if (jitsiApiRef.current) {
+                        jitsiApiRef.current.executeCommand('toggleChat');
+                      }
+                    }}
+                    className="flex flex-col items-center gap-2 text-gray-300 hover:text-white transition-colors"
+                    title="Toggle Chat"
+                  >
                     <div className="w-12 h-12 bg-gray-700 rounded-lg flex items-center justify-center hover:bg-gray-600 transition-colors">
-                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
                       </svg>
                     </div>
                   </button>
-                  <button className="flex flex-col items-center gap-2 text-gray-300 hover:text-white transition-colors">
+                  <button
+                    onClick={() => {
+                      if (jitsiApiRef.current) {
+                        jitsiApiRef.current.dispose();
+                        jitsiApiRef.current = null;
+                      }
+                      setInMeeting(false);
+                      setAudioMuted(false);
+                      setVideoMuted(false);
+                    }}
+                    className="flex flex-col items-center gap-2 text-white hover:text-red-200 transition-colors"
+                    title="Leave Meeting"
+                  >
                     <div className="w-12 h-12 bg-red-600 rounded-lg flex items-center justify-center hover:bg-red-700 transition-colors">
-                      <Phone className="w-6 h-6 transform rotate-135" />
+                      <Phone className="w-5 h-5 transform rotate-135" />
                     </div>
                   </button>
                 </div>
@@ -183,10 +393,55 @@ export function Meetings() {
               </div>
             </div>
           </div>
+          )}
 
-          {meetings.length > 0 && (
-            <div className="mt-12">
-              <h3 className="text-xl font-bold text-slate-900 mb-6">Scheduled Meetings</h3>
+          {activeTab === 'join' && inMeeting && (
+            <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
+              <div className="bg-gradient-to-r from-blue-600 to-blue-700 p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-white/20 backdrop-blur rounded-full flex items-center justify-center">
+                    <Video className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-white">{selectedRoomName}</h2>
+                    <p className="text-blue-100 text-xs">Meeting in progress</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    if (jitsiApiRef.current) {
+                      jitsiApiRef.current.dispose();
+                      jitsiApiRef.current = null;
+                    }
+                    setInMeeting(false);
+                  }}
+                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+                >
+                  <Phone className="w-4 h-4 transform rotate-135" />
+                  Leave
+                </button>
+              </div>
+
+              <div
+                ref={jitsiContainerRef}
+                style={{ width: '100%', height: '750px' }}
+                className="bg-gray-900"
+              />
+            </div>
+          )}
+
+          {activeTab === 'schedule' && meetings.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-xl font-bold text-slate-900">Scheduled Meetings</h3>
+                <button
+                  onClick={() => setShowScheduleModal(true)}
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Schedule
+                </button>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {meetings.map((meeting) => (
                   <div
@@ -234,6 +489,21 @@ export function Meetings() {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {activeTab === 'schedule' && meetings.length === 0 && (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
+              <CalendarIcon className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">No scheduled meetings</h3>
+              <p className="text-gray-600 mb-4">Schedule your first meeting to get started</p>
+              <button
+                onClick={() => setShowScheduleModal(true)}
+                className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+              >
+                <Plus className="w-5 h-5" />
+                Schedule Meeting
+              </button>
             </div>
           )}
         </div>

@@ -1,22 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../lib/auth';
-import { LOGO_SRC } from '../lib/assets';
-import {
-  LayoutDashboard,
-  Users,
-  FolderKanban,
-  Sparkles,
-  Calendar as CalendarIcon,
-  Clock,
-  MessageSquare,
-  Video,
-  BarChart3,
-  UserCircle,
-  LogOut,
-  Menu,
-  X,
-  HelpCircle
-} from 'lucide-react';
+import { LayoutDashboard, Users, FolderKanban, Sparkles, Calendar as CalendarIcon, Clock, MessageSquare, Video, BarChart3, CircleUser as UserCircle, LogOut, Menu, X, HelpCircle, Monitor } from 'lucide-react';
 import { Dashboard } from './Dashboard';
 import { CRMTabs } from './CRMTabs';
 import { Projects } from './Projects';
@@ -27,12 +11,13 @@ import { Meetings } from './Meetings';
 import { TimeTracking } from './TimeTracking';
 import { CallReports } from './CallReports';
 import { Employees } from './Employees';
+import { AgentDashboards } from './AgentDashboards';
 import { HelpNotification } from './HelpNotification';
 import { FloatingActions } from './FloatingActions';
 import { QuickCall } from './QuickCall';
 import { PhoneDialer } from './PhoneDialer';
 
-type View = 'dashboard' | 'crm' | 'projects' | 'leads' | 'calendar' | 'timeTracking' | 'messages' | 'meetings' | 'callReports' | 'employees';
+type View = 'dashboard' | 'crm' | 'projects' | 'leads' | 'calendar' | 'timeTracking' | 'messages' | 'meetings' | 'callReports' | 'employees' | 'agentDashboards';
 
 export function CRM() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
@@ -41,8 +26,11 @@ export function CRM() {
   const [showPhoneDialer, setShowPhoneDialer] = useState(false);
   const { signOut, user } = useAuth();
 
+  const isOwner = user?.email === 'thesthillstudios@gmail.com';
+
   const navigation = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, color: 'text-cyan-400' },
+    { id: 'agentDashboards', label: 'Agent Dashboards', icon: Monitor, color: 'text-blue-400' },
     { id: 'crm', label: 'CRM', icon: Users, color: 'text-pink-400' },
     { id: 'projects', label: 'Projects', icon: FolderKanban, color: 'text-amber-400' },
     { id: 'leads', label: 'Leads', icon: Sparkles, color: 'text-purple-400' },
@@ -74,6 +62,8 @@ export function CRM() {
     switch (currentView) {
       case 'dashboard':
         return <Dashboard />;
+      case 'agentDashboards':
+        return <AgentDashboards />;
       case 'crm':
         return <CRMTabs />;
       case 'projects':
@@ -107,7 +97,7 @@ export function CRM() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <img
-                  src={LOGO_SRC}
+                  src="/NEW_sthillstudisoslogo.png"
                   alt="SthillStudios Logo"
                   className="w-40 h-auto"
                 />
@@ -158,9 +148,9 @@ export function CRM() {
               <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-semibold">
                 A
               </div>
-                <div className="flex-1 min-w-0">
-                <p className="text-xs text-white font-semibold truncate">{user?.name || user?.email || 'User'}</p>
-                <p className="text-[10px] text-gray-400 uppercase">{user?.role || 'Agent'}</p>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-white font-semibold">Adrian St. Hill</p>
+                <p className="text-[10px] text-gray-400 uppercase">Admin</p>
               </div>
               <button
                 onClick={() => signOut()}

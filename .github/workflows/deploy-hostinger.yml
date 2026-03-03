@@ -228,86 +228,9 @@ jobs:
               exit 1
             fi
 
-            if [ -n "${NPM_BIN:-}" ] && [ -x "${NPM_BIN}" ]; then
-              export PATH="$(dirname "${NPM_BIN}"):$PATH"
-            fi
-
-            if ! command -v npm >/dev/null 2>&1; then
-              for BIN_DIR in \
-                "/opt/alt/alt-nodejs22/root/usr/bin" \
-                "/opt/alt/alt-nodejs20/root/usr/bin" \
-                "/opt/alt/alt-nodejs18/root/usr/bin" \
-                "$HOME/nodevenv/domains/sthillstudios.com/public_html/employeelogin/22/bin" \
-                "$HOME/nodevenv/domains/sthillstudios.com/public_html/employeelogin/20/bin" \
-                "$HOME/nodevenv/domains/sthillstudios.com/public_html/employeelogin/18/bin" \
-                "$HOME/nodevenv/domains/sthillstudios.com/public_html/22/bin" \
-                "$HOME/nodevenv/domains/sthillstudios.com/public_html/20/bin" \
-                "$HOME/nodevenv/domains/sthillstudios.com/public_html/18/bin" \
-                "$HOME/bin" \
-                "/usr/local/bin" \
-                "/usr/bin"; do
-                if [ -x "$BIN_DIR/npm" ]; then
-                  export PATH="$BIN_DIR:$PATH"
-                  break
-                fi
-              done
-            fi
-
-            if ! command -v npm >/dev/null 2>&1; then
-              [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc" || true
-              [ -f "$HOME/.profile" ] && . "$HOME/.profile" || true
-            fi
-
-            if ! command -v npm >/dev/null 2>&1; then
-              for ACTIVATE in \
-                "$HOME"/nodevenv/domains/sthillstudios.com/public_html/employeelogin/*/bin/activate \
-                "$HOME"/nodevenv/domains/sthillstudios.com/public_html/*/bin/activate \
-                "$HOME"/nodevenv/*/bin/activate; do
-                [ -f "$ACTIVATE" ] || continue
-                . "$ACTIVATE" || true
-                if command -v npm >/dev/null 2>&1; then
-                  break
-                fi
-              done
-            fi
-
-            if ! command -v npm >/dev/null 2>&1; then
-              echo "npm is not available in this SSH shell."
-              echo "Set GitHub secret HOSTINGER_NPM_BIN to absolute npm path (example: /opt/alt/alt-nodejs20/root/usr/bin/npm)."
-              echo "Also ensure a Hostinger Node app is created for /public_html/employeelogin so ~/nodevenv/.../bin/activate exists."
-              exit 1
-            fi
-
-            echo "PATH=$PATH"
-            echo "Using npm at: $(command -v npm)"
-            echo "Using node at: $(command -v node)"
-            echo "[deploy] installing dependencies"
-            npm ci
-            echo "[deploy] running migrations"
-            if ! npm run migrate:latest; then
-              echo "[deploy] first migration attempt failed; checking for partial core migration state"
-              node scripts/recover-partial-bolt-migration.cjs
-              echo "[deploy] retrying migrations after recovery"
-              if ! npm run migrate:latest; then
-                echo "[deploy] migration failed. Verify MYSQL_HOST/MYSQL_PORT or MYSQL_SOCKET_PATH, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE."
-                exit 1
-              fi
-            fi
-
-            if [ "${RUN_SQLITE_IMPORT:-false}" = "true" ]; then
-              IMPORT_PATH="${SQLITE_SOURCE_PATH:-./crm.db}"
-              if [ -f "$IMPORT_PATH" ]; then
-                echo "[deploy] importing SQLite data from $IMPORT_PATH"
-                npm run db:import-sqlite
-              else
-                echo "SQLite source not found at $IMPORT_PATH. Skipping import."
-                echo "If you need import, upload the SQLite file and set SQLITE_SOURCE_PATH."
-              fi
-            fi
-
-            echo "[deploy] runtime start is managed by Hostinger Node App; skipping process start commands."
-            mkdir -p "$TARGET/tmp" || true
-            touch "$TARGET/tmp/restart.txt" || true
+            echo "[deploy] PHP-only runtime mode enabled (no remote Node/npm required)"
+            echo "[deploy] skipping remote npm install, migrations, and Node process actions"
+            echo "[deploy] ensure MySQL schema/migrations are applied separately before first release"
 
             echo "[deploy] probing API health endpoints"
             API_PROBE_BASE="https://sthillstudios.com"

@@ -36,7 +36,7 @@ export function HelpNotification() {
       {requests.map((request) => (
         <div
           key={request.id}
-          className="bg-white rounded-xl shadow-2xl border-2 border-red-500 min-w-[360px] overflow-hidden animate-bounce"
+          className="bg-white rounded-xl shadow-2xl border-2 border-red-500 min-w-[360px] overflow-hidden animate-pulse"
         >
           <div className="bg-gradient-to-r from-red-500 to-red-600 px-4 py-2 flex items-center justify-between">
             <div className="flex items-center gap-2">

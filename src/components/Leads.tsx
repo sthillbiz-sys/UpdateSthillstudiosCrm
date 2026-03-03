@@ -1,7 +1,7 @@
-import { useEffect, useState, useRef, type FormEvent, type ChangeEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
-import { Plus, Upload, X, FileText } from 'lucide-react';
+import { Plus, Upload, X, FileText, Trash2, Edit } from 'lucide-react';
 
 interface Lead {
   id: string;
@@ -17,8 +17,10 @@ export function Leads() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [newLead, setNewLead] = useState({
     name: '',
@@ -78,6 +80,59 @@ export function Leads() {
     } catch (error) {
       console.error('Error adding lead:', error);
       alert('Failed to add lead. Please try again.');
+    }
+  };
+
+  const handleEditLead = (lead: Lead) => {
+    setEditingLead(lead);
+    setShowEditModal(true);
+  };
+
+  const handleUpdateLead = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!user || !editingLead) return;
+
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .update({
+          name: editingLead.name,
+          email: editingLead.email,
+          phone: editingLead.phone,
+          source: editingLead.source,
+        })
+        .eq('id', editingLead.id);
+
+      if (error) throw error;
+
+      setShowEditModal(false);
+      setEditingLead(null);
+      loadLeads();
+    } catch (error) {
+      console.error('Error updating lead:', error);
+      alert('Failed to update lead. Please try again.');
+    }
+  };
+
+  const handleDeleteLead = async (leadId: string, leadName: string) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${leadName}"? This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .delete()
+        .eq('id', leadId);
+
+      if (error) throw error;
+
+      loadLeads();
+    } catch (error) {
+      console.error('Error deleting lead:', error);
+      alert('Failed to delete lead. Please try again.');
     }
   };
 
@@ -310,6 +365,100 @@ export function Leads() {
         </div>
       )}
 
+      {showEditModal && editingLead && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <h2 className="text-xl font-bold text-gray-900">Edit Lead</h2>
+              <button
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditingLead(null);
+                }}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleUpdateLead} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editingLead.name}
+                  onChange={(e) => setEditingLead({ ...editingLead, name: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="John Doe"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Email *
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={editingLead.email}
+                  onChange={(e) => setEditingLead({ ...editingLead, email: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="john@example.com"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Phone
+                </label>
+                <input
+                  type="tel"
+                  value={editingLead.phone}
+                  onChange={(e) => setEditingLead({ ...editingLead, phone: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="(555) 123-4567"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Source
+                </label>
+                <select
+                  value={editingLead.source}
+                  onChange={(e) => setEditingLead({ ...editingLead, source: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="manual">Manual Entry</option>
+                  <option value="website">Website</option>
+                  <option value="referral">Referral</option>
+                  <option value="social_media">Social Media</option>
+                  <option value="cold_call">Cold Call</option>
+                  <option value="event">Event</option>
+                </select>
+              </div>
+              <div className="flex gap-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEditModal(false);
+                    setEditingLead(null);
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-medium"
+                >
+                  Update Lead
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {showUploadModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
@@ -398,7 +547,11 @@ export function Leads() {
                 </tr>
               ) : (
                 leads.map((lead) => (
-                  <tr key={lead.id} className="hover:bg-gray-50 transition-colors cursor-pointer">
+                  <tr
+                    key={lead.id}
+                    className="hover:bg-gray-50 transition-colors cursor-pointer"
+                    onClick={() => handleEditLead(lead)}
+                  >
                     <td className="px-6 py-4 text-sm text-gray-900 whitespace-nowrap">
                       {lead.name}
                     </td>
@@ -422,12 +575,37 @@ export function Leads() {
                       {formatDate(lead.date)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <button
-                        onClick={() => handleConvertToCRM(lead)}
-                        className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg transition-colors"
-                      >
-                        Add to CRM
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleConvertToCRM(lead);
+                          }}
+                          className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg transition-colors"
+                        >
+                          Add to CRM
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleEditLead(lead);
+                          }}
+                          className="p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+                          title="Edit lead"
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteLead(lead.id, lead.name);
+                          }}
+                          className="p-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                          title="Delete lead"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))

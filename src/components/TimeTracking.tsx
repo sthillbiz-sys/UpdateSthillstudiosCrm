@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
-import { Clock, Coffee, LogOut, Calendar, TrendingUp } from 'lucide-react';
+import { Clock, Coffee, LogOut, Calendar, TrendingUp, Pause, Play, X } from 'lucide-react';
 
 interface ShiftEntry {
   id: string;
@@ -18,17 +18,36 @@ interface ShiftEntry {
   created_at: string;
 }
 
+interface BreakEntry {
+  id: string;
+  user_id: string;
+  shift_id?: string;
+  break_start: string;
+  break_end?: string;
+  duration_minutes: number;
+  break_type: string;
+  status: 'in_progress' | 'completed';
+  notes?: string;
+  created_at: string;
+}
+
 export function TimeTracking() {
   const { user } = useAuth();
   const [activeShift, setActiveShift] = useState<ShiftEntry | null>(null);
   const [shifts, setShifts] = useState<ShiftEntry[]>([]);
+  const [breaks, setBreaks] = useState<BreakEntry[]>([]);
+  const [activeBreak, setActiveBreak] = useState<BreakEntry | null>(null);
+  const [showBreakModal, setShowBreakModal] = useState(false);
+  const [breakType, setBreakType] = useState('15-minute');
   const [loading, setLoading] = useState(true);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [view, setView] = useState<'today' | 'week' | 'month' | 'year'>('today');
 
   useEffect(() => {
     loadShifts();
+    loadBreaks();
     checkActiveShift();
+    checkActiveBreak();
   }, [user]);
 
   useEffect(() => {
@@ -75,6 +94,24 @@ export function TimeTracking() {
     }
   };
 
+  const loadBreaks = async () => {
+    if (!user) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('break_entries')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('break_start', { ascending: false })
+        .limit(50);
+
+      if (error) throw error;
+      if (data) setBreaks(data);
+    } catch (error) {
+      console.error('Error loading breaks:', error);
+    }
+  };
+
   const checkActiveShift = async () => {
     if (!user) return;
 
@@ -90,6 +127,24 @@ export function TimeTracking() {
       if (data) setActiveShift(data);
     } catch (error) {
       console.error('Error checking active shift:', error);
+    }
+  };
+
+  const checkActiveBreak = async () => {
+    if (!user) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('break_entries')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('status', 'in_progress')
+        .maybeSingle();
+
+      if (error) throw error;
+      if (data) setActiveBreak(data);
+    } catch (error) {
+      console.error('Error checking active break:', error);
     }
   };
 
@@ -193,6 +248,58 @@ export function TimeTracking() {
       loadShifts();
     } catch (error) {
       console.error('Error ending shift:', error);
+    }
+  };
+
+  const handleStartBreak = async () => {
+    if (!user) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('break_entries')
+        .insert([
+          {
+            user_id: user.id,
+            shift_id: activeShift?.id,
+            break_start: new Date().toISOString(),
+            break_type: breakType,
+            status: 'in_progress',
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) throw error;
+      setActiveBreak(data);
+      setShowBreakModal(false);
+      loadBreaks();
+    } catch (error) {
+      console.error('Error starting break:', error);
+    }
+  };
+
+  const handleEndBreak = async () => {
+    if (!activeBreak) return;
+
+    try {
+      const breakEnd = new Date();
+      const breakStart = new Date(activeBreak.break_start);
+      const duration = Math.floor((breakEnd.getTime() - breakStart.getTime()) / 60000);
+
+      const { error } = await supabase
+        .from('break_entries')
+        .update({
+          break_end: breakEnd.toISOString(),
+          duration_minutes: duration,
+          status: 'completed',
+        })
+        .eq('id', activeBreak.id);
+
+      if (error) throw error;
+      setActiveBreak(null);
+      loadBreaks();
+    } catch (error) {
+      console.error('Error ending break:', error);
     }
   };
 
@@ -304,23 +411,40 @@ export function TimeTracking() {
             </div>
 
             <div className="grid grid-cols-3 gap-3">
-              {activeShift.status === 'clocked_in' && (
+              {activeShift.status === 'clocked_in' && !activeBreak && (
                 <>
                   <button
                     onClick={handleLunchStart}
-                    className="flex flex-col items-center gap-2 bg-white/10 hover:bg-white/20 backdrop-blur-sm rounded-xl p-4 transition-all"
+                    className="flex flex-col items-center gap-2 bg-yellow-500 hover:bg-yellow-400 text-yellow-900 rounded-xl p-4 transition-all font-medium shadow-lg"
                   >
-                    <Coffee className="w-6 h-6" />
-                    <span className="text-sm font-medium">Start Lunch</span>
+                    <Coffee className="w-5 h-5" />
+                    <span className="text-xs font-semibold">Lunch</span>
+                  </button>
+                  <button
+                    onClick={() => setShowBreakModal(true)}
+                    className="flex flex-col items-center gap-2 bg-orange-500 hover:bg-orange-400 text-orange-900 rounded-xl p-4 transition-all font-medium shadow-lg"
+                  >
+                    <Pause className="w-5 h-5" />
+                    <span className="text-xs font-semibold">Break</span>
                   </button>
                   <button
                     onClick={handleEndShift}
-                    className="col-span-2 flex items-center justify-center gap-2 bg-white hover:bg-gray-100 text-blue-700 rounded-xl p-4 font-semibold transition-all"
+                    className="flex items-center justify-center gap-2 bg-red-500 hover:bg-red-400 text-white rounded-xl p-4 font-semibold transition-all shadow-lg"
                   >
                     <LogOut className="w-5 h-5" />
-                    End Shift
+                    <span className="text-xs">End Shift</span>
                   </button>
                 </>
+              )}
+
+              {activeShift.status === 'clocked_in' && activeBreak && (
+                <button
+                  onClick={handleEndBreak}
+                  className="col-span-3 flex items-center justify-center gap-2 bg-orange-400 hover:bg-orange-300 text-orange-900 rounded-xl p-4 font-semibold transition-all"
+                >
+                  <Play className="w-5 h-5" />
+                  End Break
+                </button>
               )}
 
               {activeShift.status === 'on_lunch' && (
@@ -339,17 +463,75 @@ export function TimeTracking() {
                 <p className="text-sm font-medium text-yellow-100">Currently on lunch break</p>
               </div>
             )}
+
+            {activeBreak && (
+              <div className="bg-orange-400/20 border border-orange-400/30 rounded-lg p-3 text-center">
+                <p className="text-sm font-medium text-orange-100">
+                  On {activeBreak.break_type} break since{' '}
+                  {new Date(activeBreak.break_start).toLocaleTimeString()}
+                </p>
+              </div>
+            )}
           </div>
         ) : (
           <button
             onClick={handleStartShift}
-            className="w-full flex items-center justify-center gap-3 bg-white hover:bg-gray-100 text-blue-700 rounded-xl p-6 font-bold text-lg transition-all shadow-lg"
+            className="max-w-xs mx-auto flex items-center justify-center gap-3 bg-white hover:bg-gray-100 text-blue-700 rounded-xl px-8 py-4 font-bold text-lg transition-all shadow-lg"
           >
             <Clock className="w-6 h-6" />
             Start Shift
           </button>
         )}
       </div>
+
+      {showBreakModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
+            <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-slate-900">Take a Break</h2>
+              <button
+                onClick={() => setShowBreakModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Break Duration
+                </label>
+                <select
+                  value={breakType}
+                  onChange={(e) => setBreakType(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="15-minute">15 Minutes</option>
+                  <option value="30-minute">30 Minutes</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-3 pt-4">
+                <button
+                  onClick={handleStartBreak}
+                  className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+                >
+                  <Pause className="w-5 h-5" />
+                  Start Break
+                </button>
+                <button
+                  onClick={() => setShowBreakModal(false)}
+                  className="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 mb-6">
         <div className="p-6 border-b border-gray-200">
@@ -404,6 +586,83 @@ export function TimeTracking() {
               <p className="text-xs text-orange-700 mt-1">{getViewLabel()}</p>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6">
+        <div className="p-6 border-b border-gray-200">
+          <h2 className="text-lg font-bold text-slate-900">Recent Breaks</h2>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  Date
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  Break Type
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  Start Time
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  End Time
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  Duration
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  Status
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200 bg-white">
+              {breaks.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-12 text-center text-gray-500 text-sm">
+                    No breaks recorded yet
+                  </td>
+                </tr>
+              ) : (
+                breaks.slice(0, 10).map((breakEntry) => (
+                  <tr key={breakEntry.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                      {new Date(breakEntry.break_start).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-600 capitalize">
+                      {breakEntry.break_type}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-600">
+                      {new Date(breakEntry.break_start).toLocaleTimeString()}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-600">
+                      {breakEntry.break_end
+                        ? new Date(breakEntry.break_end).toLocaleTimeString()
+                        : '-'}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-600">
+                      {breakEntry.duration_minutes > 0
+                        ? `${breakEntry.duration_minutes} min`
+                        : '-'}
+                    </td>
+                    <td className="px-6 py-4 text-sm">
+                      <span
+                        className={`px-3 py-1 rounded-full text-xs font-medium ${
+                          breakEntry.status === 'in_progress'
+                            ? 'bg-orange-100 text-orange-800'
+                            : 'bg-gray-100 text-gray-800'
+                        }`}
+                      >
+                        {breakEntry.status === 'in_progress' ? 'Active' : 'Completed'}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 

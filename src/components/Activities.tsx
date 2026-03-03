@@ -50,7 +50,7 @@ export function Activities() {
       const { data } = await supabase
         .from('activities')
         .select('*')
-        .order('due_date', { ascending: true })
+        .order('due_date', { ascending: true, nullsFirst: false })
         .order('created_at', { ascending: false });
 
       if (data) setActivities(data);

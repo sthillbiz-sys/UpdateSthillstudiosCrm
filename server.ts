@@ -484,6 +484,66 @@ async function startServer() {
     }),
   );
 
+  apiRouter.put(
+    "/employees/:id",
+    asyncHandler(async (req, res) => {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: "Invalid employee id" });
+        return;
+      }
+
+      const body = req.body as Record<string, unknown>;
+      const payload: Record<string, unknown> = {};
+
+      if (Object.prototype.hasOwnProperty.call(body, "full_name")) {
+        payload.name = String(body.full_name ?? "").trim();
+      } else if (Object.prototype.hasOwnProperty.call(body, "name")) {
+        payload.name = String(body.name ?? "").trim();
+      }
+
+      if (Object.prototype.hasOwnProperty.call(body, "email")) {
+        payload.email = String(body.email ?? "").trim();
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "role")) {
+        payload.role = String(body.role ?? "").trim();
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "phone")) {
+        payload.contact_info = String(body.phone ?? "").trim();
+      } else if (Object.prototype.hasOwnProperty.call(body, "contact_info")) {
+        payload.contact_info = String(body.contact_info ?? "").trim();
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "hourly_rate")) {
+        const raw = body.hourly_rate;
+        payload.hourly_rate = raw === "" || raw === null ? null : Number(raw);
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "hire_date")) {
+        const raw = String(body.hire_date ?? "").trim();
+        payload.hire_date = raw === "" ? null : raw;
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "status")) {
+        const raw = String(body.status ?? "").trim();
+        payload.status = raw || "active";
+      }
+
+      if (Object.keys(payload).length === 0) {
+        res.status(400).json({ error: "No updatable fields provided" });
+        return;
+      }
+
+      const affectedRows = await db("employees").where({ id }).update(payload);
+      if (affectedRows === 0) {
+        const existing = await db("employees").where({ id }).first();
+        if (!existing) {
+          res.status(404).json({ error: "Employee not found" });
+          return;
+        }
+      }
+
+      res.json({ success: true });
+    }),
+  );
+
   apiRouter.get(
     "/calls",
     asyncHandler<AuthedRequest>(async (req, res) => {
@@ -543,6 +603,88 @@ async function startServer() {
     asyncHandler(async (_req, res) => {
       const leads = await db("leads").select("*").orderBy("timestamp", "desc");
       res.json(leads);
+    }),
+  );
+
+  apiRouter.post(
+    "/leads",
+    asyncHandler<AuthedRequest>(async (req, res) => {
+      const body = req.body as Record<string, unknown>;
+      const name = String(body.name ?? "").trim();
+      if (!name) {
+        res.status(400).json({ error: "Lead name is required" });
+        return;
+      }
+
+      const insertedIds = await db("leads").insert({
+        name,
+        email: String(body.email ?? "").trim(),
+        phone: String(body.phone ?? "").trim(),
+        source: String(body.source ?? "manual").trim() || "manual",
+        created_by_user_id: req.user?.id || null,
+      });
+
+      res.json({ id: toNumeric(insertedIds[0]) });
+    }),
+  );
+
+  apiRouter.put(
+    "/leads/:id",
+    asyncHandler(async (req, res) => {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: "Invalid lead id" });
+        return;
+      }
+
+      const body = req.body as Record<string, unknown>;
+      const payload: Record<string, unknown> = {};
+      if (Object.prototype.hasOwnProperty.call(body, "name")) {
+        payload.name = String(body.name ?? "").trim();
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "email")) {
+        payload.email = String(body.email ?? "").trim();
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "phone")) {
+        payload.phone = String(body.phone ?? "").trim();
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "source")) {
+        payload.source = String(body.source ?? "manual").trim() || "manual";
+      }
+
+      if (Object.keys(payload).length === 0) {
+        res.status(400).json({ error: "No updatable fields provided" });
+        return;
+      }
+
+      const affectedRows = await db("leads").where({ id }).update(payload);
+      if (affectedRows === 0) {
+        const existing = await db("leads").where({ id }).first();
+        if (!existing) {
+          res.status(404).json({ error: "Lead not found" });
+          return;
+        }
+      }
+
+      res.json({ success: true });
+    }),
+  );
+
+  apiRouter.delete(
+    "/leads/:id",
+    asyncHandler(async (req, res) => {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: "Invalid lead id" });
+        return;
+      }
+
+      const affectedRows = await db("leads").where({ id }).del();
+      if (affectedRows === 0) {
+        res.status(404).json({ error: "Lead not found" });
+        return;
+      }
+      res.json({ success: true });
     }),
   );
 

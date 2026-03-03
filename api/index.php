@@ -637,6 +637,58 @@ try {
         json_response(['id' => (int) db()->lastInsertId()]);
     }
 
+    if (preg_match('#^employees/(\d+)$#', $route, $matches) === 1 && $method === 'PUT') {
+        $id = (int) $matches[1];
+        $input = read_json_body();
+
+        $nameInput = array_key_exists('full_name', $input) ? $input['full_name'] : ($input['name'] ?? null);
+        $contactInput = array_key_exists('phone', $input) ? $input['phone'] : ($input['contact_info'] ?? null);
+
+        $fields = [];
+        $params = [];
+        if ($nameInput !== null) {
+            $fields[] = 'name = ?';
+            $params[] = trim((string) $nameInput);
+        }
+        if (array_key_exists('email', $input)) {
+            $fields[] = 'email = ?';
+            $params[] = trim((string) ($input['email'] ?? ''));
+        }
+        if (array_key_exists('role', $input)) {
+            $fields[] = 'role = ?';
+            $params[] = trim((string) ($input['role'] ?? ''));
+        }
+        if ($contactInput !== null) {
+            $fields[] = 'contact_info = ?';
+            $params[] = trim((string) $contactInput);
+        }
+        if (array_key_exists('hourly_rate', $input)) {
+            $fields[] = 'hourly_rate = ?';
+            $params[] = $input['hourly_rate'] === '' || $input['hourly_rate'] === null ? null : (float) $input['hourly_rate'];
+        }
+        if (array_key_exists('hire_date', $input)) {
+            $fields[] = 'hire_date = ?';
+            $hireDate = trim((string) ($input['hire_date'] ?? ''));
+            $params[] = $hireDate !== '' ? $hireDate : null;
+        }
+        if (array_key_exists('status', $input)) {
+            $fields[] = 'status = ?';
+            $params[] = trim((string) ($input['status'] ?? 'active')) ?: 'active';
+        }
+        if (count($fields) === 0) {
+            json_response(['error' => 'No updatable fields provided'], 400);
+        }
+
+        $params[] = $id;
+        $sql = 'UPDATE employees SET ' . implode(', ', $fields) . ' WHERE id = ?';
+        $stmt = db()->prepare($sql);
+        $stmt->execute($params);
+        if ($stmt->rowCount() === 0) {
+            json_response(['error' => 'Employee not found'], 404);
+        }
+        json_response(['success' => true]);
+    }
+
     if ($route === 'calls' && $method === 'GET') {
         if ($canViewAllCalls) {
             $rows = db()->query('SELECT * FROM calls ORDER BY timestamp DESC')->fetchAll();
@@ -950,6 +1002,42 @@ try {
             $authUserId > 0 ? $authUserId : null,
         ]);
         json_response(['id' => (int) db()->lastInsertId()]);
+    }
+
+    if (preg_match('#^leads/(\d+)$#', $route, $matches) === 1 && $method === 'PUT') {
+        $id = (int) $matches[1];
+        $input = read_json_body();
+
+        $fields = [];
+        $params = [];
+        if (array_key_exists('name', $input)) {
+            $fields[] = 'name = ?';
+            $params[] = trim((string) ($input['name'] ?? ''));
+        }
+        if (array_key_exists('email', $input)) {
+            $fields[] = 'email = ?';
+            $params[] = trim((string) ($input['email'] ?? ''));
+        }
+        if (array_key_exists('phone', $input)) {
+            $fields[] = 'phone = ?';
+            $params[] = trim((string) ($input['phone'] ?? ''));
+        }
+        if (array_key_exists('source', $input)) {
+            $fields[] = 'source = ?';
+            $params[] = trim((string) ($input['source'] ?? 'manual')) ?: 'manual';
+        }
+        if (count($fields) === 0) {
+            json_response(['error' => 'No updatable fields provided'], 400);
+        }
+
+        $params[] = $id;
+        $sql = 'UPDATE leads SET ' . implode(', ', $fields) . ' WHERE id = ?';
+        $stmt = db()->prepare($sql);
+        $stmt->execute($params);
+        if ($stmt->rowCount() === 0) {
+            json_response(['error' => 'Lead not found'], 404);
+        }
+        json_response(['success' => true]);
     }
 
     if (preg_match('#^leads/(\d+)$#', $route, $matches) === 1 && $method === 'DELETE') {

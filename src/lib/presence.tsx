@@ -11,6 +11,12 @@ export interface UserPresence {
   custom_message: string;
   is_on_call: boolean;
   last_activity: string;
+  employee?: {
+    full_name: string;
+    email: string;
+    assigned_color: string;
+    role: string;
+  };
 }
 
 type PresenceContextType = {
@@ -47,6 +53,12 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
       custom_message: '',
       is_on_call: false,
       last_activity: new Date().toISOString(),
+      employee: {
+        full_name: user.name,
+        email: user.email,
+        assigned_color: '#3B82F6',
+        role: user.role || 'agent',
+      },
     };
 
     setMyPresence(selfPresence);
@@ -59,7 +71,7 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      const employees = await apiGet<Array<{ id: number; name: string; role?: string }>>('/employees');
+      const employees = await apiGet<Array<{ id: number; name: string; email?: string; role?: string }>>('/employees');
 
       const mapped = employees.map((employee) => ({
         user_id: Number(employee.id),
@@ -68,6 +80,12 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
         custom_message: '',
         is_on_call: false,
         last_activity: new Date().toISOString(),
+        employee: {
+          full_name: employee.name,
+          email: employee.email || '',
+          assigned_color: '#3B82F6',
+          role: employee.role || 'agent',
+        },
       }));
 
       const deduped = new Map<number, UserPresence>();

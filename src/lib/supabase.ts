@@ -2,7 +2,7 @@ import { apiDelete, apiGet, apiPost, apiPut, clearStoredSession, getStoredToken,
 
 type SupabaseResult<T = any> = { data: T; error: any; count?: number | null };
 
-type Filter = { op: 'eq' | 'gte' | 'lte' | 'in'; column: string; value: any };
+type Filter = { op: 'eq' | 'neq' | 'gte' | 'lte' | 'in'; column: string; value: any };
 type OrderBy = { column: string; ascending: boolean };
 
 function tableToRoute(table: string): string {
@@ -33,12 +33,51 @@ function filterRows(rows: any[], filters: Filter[]): any[] {
     for (const filter of filters) {
       const rowValue = row[filter.column];
       if (filter.op === 'eq' && rowValue != filter.value) return false;
+      if (filter.op === 'neq' && rowValue == filter.value) return false;
       if (filter.op === 'gte' && toComparable(rowValue) < toComparable(filter.value)) return false;
       if (filter.op === 'lte' && toComparable(rowValue) > toComparable(filter.value)) return false;
       if (filter.op === 'in' && Array.isArray(filter.value) && !filter.value.includes(rowValue)) return false;
     }
     return true;
   });
+}
+
+function normalizeEmployeeRow(row: any) {
+  const fullName = row?.full_name || row?.name || '';
+  const phone = row?.phone || row?.contact_info || '';
+  return {
+    ...row,
+    id: String(row?.id ?? ''),
+    full_name: fullName,
+    name: fullName,
+    phone,
+    contact_info: phone,
+    role: row?.role || 'employee',
+    status: row?.status || 'active',
+    assigned_color: row?.assigned_color || '#3B82F6',
+  };
+}
+
+function normalizeEmployeePayload(payload: any) {
+  if (!payload || typeof payload !== 'object') {
+    return payload;
+  }
+  const mapped = { ...payload } as Record<string, any>;
+  if (Object.prototype.hasOwnProperty.call(mapped, 'full_name')) {
+    mapped.name = mapped.full_name;
+    delete mapped.full_name;
+  }
+  if (Object.prototype.hasOwnProperty.call(mapped, 'phone')) {
+    mapped.contact_info = mapped.phone;
+    delete mapped.phone;
+  }
+  if (Object.prototype.hasOwnProperty.call(mapped, 'assigned_color')) {
+    delete mapped.assigned_color;
+  }
+  if (Object.prototype.hasOwnProperty.call(mapped, 'id')) {
+    delete mapped.id;
+  }
+  return mapped;
 }
 
 class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
@@ -50,6 +89,7 @@ class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
   private wantSingle = false;
   private wantMaybeSingle = false;
   private wantHeadCount = false;
+  private wantCount = false;
 
   constructor(private readonly table: string) {}
 
@@ -57,8 +97,11 @@ class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
     if (this.action === 'select') {
       this.action = 'select';
     }
-    if (options?.count === 'exact' && options?.head === true) {
-      this.wantHeadCount = true;
+    if (options?.count === 'exact') {
+      this.wantCount = true;
+      if (options.head === true) {
+        this.wantHeadCount = true;
+      }
     }
     return this;
   }
@@ -85,6 +128,11 @@ class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
     return this;
   }
 
+  neq(column: string, value: any) {
+    this.filters.push({ op: 'neq', column, value });
+    return this;
+  }
+
   gte(column: string, value: any) {
     this.filters.push({ op: 'gte', column, value });
     return this;
@@ -100,7 +148,7 @@ class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
     return this;
   }
 
-  order(column: string, options?: { ascending?: boolean }) {
+  order(column: string, options?: { ascending?: boolean; nullsFirst?: boolean }) {
     this.orders.push({ column, ascending: options?.ascending !== false });
     return this;
   }
@@ -135,6 +183,7 @@ class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
         const calls = await apiGet<any[]>('/calls');
         const mapped = calls.map((call) => ({
           id: call.id,
+          user_id: call.created_by_user_id ? String(call.created_by_user_id) : '',
           user_email: '',
           contact_name: call.contact_name || '',
           contact_phone: call.phone_number || '',
@@ -148,17 +197,39 @@ class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
 
       if (this.table === 'user_presence') {
         const employees = await apiGet<any[]>('/employees');
-        const mapped = employees.map((employee) => ({
-          user_id: Number(employee.id),
+        const mapped = employees.map((row) => {
+          const employee = normalizeEmployeeRow(row);
+          return {
+          user_id: employee.id,
+          name: employee.full_name || employee.email || 'Team Member',
           status: 'available',
           custom_message: '',
           is_on_call: false,
           last_activity: new Date().toISOString(),
-        }));
+          employee: {
+            full_name: employee.full_name || employee.email || 'Team Member',
+            email: employee.email || '',
+            assigned_color: employee.assigned_color || '#3B82F6',
+            role: employee.role || 'employee',
+          },
+        };
+      });
         return this.finalizeResult(mapped);
       }
 
       const rows = await apiGet<any[]>(tableToRoute(this.table));
+      if (this.table === 'employees') {
+        const mapped = rows.map(normalizeEmployeeRow);
+        return this.finalizeResult(mapped);
+      }
+      if (this.table === 'leads') {
+        const mapped = rows.map((row) => ({
+          ...row,
+          created_at: row.created_at || row.timestamp || row.date || new Date().toISOString(),
+          date: row.date || row.timestamp || row.created_at || new Date().toISOString(),
+        }));
+        return this.finalizeResult(mapped);
+      }
       if (this.table === 'contacts') {
         const mapped = rows.map((row) => ({
           ...row,
@@ -194,7 +265,8 @@ class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
 
   private async executeInsert(): Promise<SupabaseResult<any>> {
     try {
-      const payload = Array.isArray(this.payload) ? this.payload[0] : this.payload;
+      const rawPayload = Array.isArray(this.payload) ? this.payload[0] : this.payload;
+      const payload = this.table === 'employees' ? normalizeEmployeePayload(rawPayload) : rawPayload;
       const data = await apiPost<any>(tableToRoute(this.table), payload);
       return this.finalizeMutationResult(data);
     } catch (error) {
@@ -208,7 +280,8 @@ class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
       if (id === undefined || id === null) {
         return { data: null, error: new Error('Missing id filter for update') };
       }
-      const data = await apiPut<any>(`${tableToRoute(this.table)}/${id}`, this.payload);
+      const payload = this.table === 'employees' ? normalizeEmployeePayload(this.payload) : this.payload;
+      const data = await apiPut<any>(`${tableToRoute(this.table)}/${id}`, payload);
       return this.finalizeMutationResult(data);
     } catch (error) {
       return { data: null, error };
@@ -259,6 +332,10 @@ class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
 
     if (this.wantMaybeSingle) {
       return { data: filtered[0] || null, error: null };
+    }
+
+    if (this.wantCount) {
+      return { data: filtered, error: null, count: filtered.length };
     }
 
     return { data: filtered, error: null };
@@ -319,10 +396,10 @@ export const supabase = {
   },
   channel(_name: string) {
     return {
-      on() {
+      on(..._args: any[]) {
         return this;
       },
-      subscribe() {
+      subscribe(..._args: any[]) {
         return this;
       },
       unsubscribe() {
@@ -358,18 +435,35 @@ export const supabase = {
         return { error };
       }
     },
-    async signUp({ email, password }: { email: string; password: string }) {
-      const fallbackName = email.split('@')[0] || 'User';
+    async signUp({
+      email,
+      password,
+      options,
+    }: {
+      email: string;
+      password: string;
+      options?: { data?: { full_name?: string } };
+    }) {
+      const providedName = options?.data?.full_name?.trim();
+      const fallbackName = providedName || email.split('@')[0] || 'User';
       try {
         const data = await apiPost<{ token: string; user: ApiUser }>('/auth/signup', {
           name: fallbackName,
           email,
           password,
         });
-        persistSession(data.token, data.user);
-        return { error: null };
+        return {
+          data: {
+            user: {
+              id: String(data.user.id),
+              email: data.user.email,
+              user_metadata: { full_name: data.user.name || fallbackName },
+            },
+          },
+          error: null,
+        };
       } catch (error) {
-        return { error };
+        return { data: { user: null }, error };
       }
     },
     async signOut() {
@@ -384,9 +478,9 @@ export const supabase = {
             email: employee.email || '',
             created_at: employee.hire_date || new Date().toISOString(),
             user_metadata: {
-              full_name: employee.name,
-              phone: employee.contact_info || '',
-              role: employee.role || 'Agent',
+              full_name: employee.full_name || employee.name || '',
+              phone: employee.phone || employee.contact_info || '',
+              role: employee.role || 'agent',
             },
           }));
 
@@ -396,6 +490,9 @@ export const supabase = {
         }
       },
     },
+  },
+  async rpc(_functionName: string, _args?: Record<string, unknown>) {
+    return { data: null, error: null };
   },
 };
 
