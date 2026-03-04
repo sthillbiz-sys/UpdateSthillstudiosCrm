@@ -1,6 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { useAuth } from '../lib/auth';
 import { useEmployee } from '../lib/employee';
 import { Users as Users2, TrendingUp, Phone, Calendar, DollarSign, Eye, X } from 'lucide-react';
 
@@ -28,60 +27,75 @@ interface AgentDashboardDetails {
 }
 
 export function AgentDashboards() {
-  const { user } = useAuth();
-  const { isAdmin, allEmployees } = useEmployee();
-  const [agents, setAgents] = useState<Agent[]>([]);
+  const { isAdmin, allEmployees, loading: employeesLoading } = useEmployee();
   const [onlinePresence, setOnlinePresence] = useState<Record<string, boolean>>({});
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [agentStats, setAgentStats] = useState<Record<string, AgentStats>>({});
+  const [overallLeadsCount, setOverallLeadsCount] = useState(0);
+  const [overallCallsCount, setOverallCallsCount] = useState(0);
   const [agentDetails, setAgentDetails] = useState<Record<string, AgentDashboardDetails>>({});
   const [loadingDetails, setLoadingDetails] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [presenceLoading, setPresenceLoading] = useState(true);
+
+  const agents = useMemo<Agent[]>(() => {
+    const mapped = allEmployees.map((emp) => ({
+      id: emp.id,
+      email: emp.email,
+      full_name: emp.full_name || emp.email.split('@')[0],
+      role: emp.role,
+      assigned_color: emp.assigned_color || '#3B82F6',
+      status: emp.status,
+      isOnline: Boolean(onlinePresence[emp.id]),
+    }));
+
+    const explicitAgents = mapped.filter((emp) => emp.role === 'agent');
+    if (explicitAgents.length > 0) {
+      return explicitAgents;
+    }
+
+    // Fallback for legacy data where non-admin team members may still be "employee".
+    return mapped.filter((emp) => emp.role !== 'admin');
+  }, [allEmployees, onlinePresence]);
 
   useEffect(() => {
-    loadAgents();
-    loadPresence();
-
-    const presenceChannel = supabase.channel('presence-tracking')
-      .on('presence', { event: 'sync' }, () => {
-        loadPresence();
-      })
-      .subscribe();
+    void loadPresence();
+    const intervalId = window.setInterval(() => {
+      void loadPresence();
+    }, 30000);
 
     return () => {
-      presenceChannel.unsubscribe();
+      window.clearInterval(intervalId);
     };
   }, [allEmployees]);
 
   useEffect(() => {
     if (agents.length > 0) {
-      loadAllAgentStats();
+      void loadAllAgentStats(agents);
+    } else {
+      setAgentStats({});
     }
   }, [agents]);
 
-  const loadAgents = async () => {
-    try {
-      const agentList = allEmployees
-        .filter(emp => emp.role === 'agent')
-        .map(emp => ({
-          id: emp.id,
-          email: emp.email,
-          full_name: emp.full_name || emp.email.split('@')[0],
-          role: emp.role,
-          assigned_color: emp.assigned_color || '#3B82F6',
-          status: emp.status,
-          isOnline: false,
-        }));
+  useEffect(() => {
+    void loadOverallTotals();
+  }, [allEmployees]);
 
-      setAgents(agentList);
-    } catch (error) {
-      console.error('Error loading agents:', error);
-    } finally {
-      setLoading(false);
+  const buildFallbackPresenceMap = () => {
+    const fallbackMap: Record<string, boolean> = {};
+    for (const employee of allEmployees) {
+      const status = String(employee.status || 'active').toLowerCase();
+      fallbackMap[employee.id] = status !== 'inactive';
     }
+    return fallbackMap;
   };
 
   const loadPresence = async () => {
+    if (allEmployees.length === 0) {
+      setOnlinePresence({});
+      setPresenceLoading(false);
+      return;
+    }
+
     try {
       const { data, error } = await supabase
         .from('user_presence')
@@ -92,29 +106,48 @@ export function AgentDashboards() {
 
       const presenceMap: Record<string, boolean> = {};
       data?.forEach(presence => {
-        presenceMap[presence.user_id] = true;
+        presenceMap[String(presence.user_id)] = true;
       });
 
-      setOnlinePresence(presenceMap);
-      setAgents(prev => prev.map(agent => ({
-        ...agent,
-        isOnline: presenceMap[agent.id] || false,
-      })));
+      if (Object.keys(presenceMap).length === 0) {
+        setOnlinePresence(buildFallbackPresenceMap());
+      } else {
+        setOnlinePresence(presenceMap);
+      }
     } catch (error) {
       console.error('Error loading presence:', error);
+      setOnlinePresence(buildFallbackPresenceMap());
+    } finally {
+      setPresenceLoading(false);
     }
   };
 
-  const loadAllAgentStats = async () => {
-    const statsPromises = agents.map(agent => loadAgentStats(agent.id));
+  const loadAllAgentStats = async (agentList: Agent[]) => {
+    const statsPromises = agentList.map(agent => loadAgentStats(agent.id));
     const results = await Promise.all(statsPromises);
 
     const statsMap: Record<string, AgentStats> = {};
-    agents.forEach((agent, index) => {
+    agentList.forEach((agent, index) => {
       statsMap[agent.id] = results[index];
     });
 
     setAgentStats(statsMap);
+  };
+
+  const loadOverallTotals = async () => {
+    try {
+      const [leadsData, callsData] = await Promise.all([
+        supabase.from('leads').select('id', { count: 'exact', head: true }),
+        supabase.from('call_history').select('id', { count: 'exact', head: true }),
+      ]);
+
+      setOverallLeadsCount(leadsData.count || 0);
+      setOverallCallsCount(callsData.count || 0);
+    } catch (error) {
+      console.error('Error loading overall dashboard totals:', error);
+      setOverallLeadsCount(0);
+      setOverallCallsCount(0);
+    }
   };
 
   const loadAgentStats = async (agentId: string): Promise<AgentStats> => {
@@ -208,7 +241,7 @@ export function AgentDashboards() {
     );
   }
 
-  if (loading) {
+  if (employeesLoading || presenceLoading) {
     return (
       <div className="p-8 bg-[#FDF8F3] min-h-screen">
         <div className="animate-pulse space-y-4">
@@ -222,6 +255,10 @@ export function AgentDashboards() {
       </div>
     );
   }
+
+  const statsValues = Object.values(agentStats) as AgentStats[];
+  const totalLeads = Math.max(overallLeadsCount, statsValues.reduce((sum, stats) => sum + stats.totalLeads, 0));
+  const totalCalls = Math.max(overallCallsCount, statsValues.reduce((sum, stats) => sum + stats.completedCalls, 0));
 
   return (
     <div className="p-8 bg-[#FDF8F3] min-h-screen">
@@ -255,7 +292,7 @@ export function AgentDashboards() {
             <TrendingUp className="w-5 h-5 text-purple-500" />
           </div>
           <p className="text-3xl font-bold text-slate-900">
-            {(Object.values(agentStats) as AgentStats[]).reduce((sum, stats) => sum + stats.totalLeads, 0)}
+            {totalLeads}
           </p>
         </div>
 
@@ -265,7 +302,7 @@ export function AgentDashboards() {
             <Phone className="w-5 h-5 text-green-500" />
           </div>
           <p className="text-3xl font-bold text-slate-900">
-            {(Object.values(agentStats) as AgentStats[]).reduce((sum, stats) => sum + stats.completedCalls, 0)}
+            {totalCalls}
           </p>
         </div>
       </div>
