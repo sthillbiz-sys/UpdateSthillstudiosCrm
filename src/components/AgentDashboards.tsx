@@ -38,15 +38,21 @@ export function AgentDashboards() {
   const [presenceLoading, setPresenceLoading] = useState(true);
 
   const agents = useMemo<Agent[]>(() => {
-    const mapped = allEmployees.map((emp) => ({
-      id: emp.id,
-      email: emp.email,
-      full_name: emp.full_name || emp.email.split('@')[0],
-      role: emp.role,
-      assigned_color: emp.assigned_color || '#3B82F6',
-      status: emp.status,
-      isOnline: Boolean(onlinePresence[emp.id]),
-    }));
+    const mapped = allEmployees.map((emp) => {
+      const email = String(emp.email || '').trim();
+      const emailKey = email.toLowerCase();
+      return {
+        id: emp.id,
+        email,
+        full_name: emp.full_name || (email !== '' ? email.split('@')[0] : 'Agent'),
+        role: emp.role,
+        assigned_color: emp.assigned_color || '#3B82F6',
+        status: emp.status,
+        isOnline:
+          Boolean(onlinePresence[`id:${emp.id}`]) ||
+          (emailKey !== '' && Boolean(onlinePresence[`email:${emailKey}`])),
+      };
+    });
 
     const explicitAgents = mapped.filter((emp) => emp.role === 'agent');
     if (explicitAgents.length > 0) {
@@ -74,7 +80,7 @@ export function AgentDashboards() {
     void loadPresence();
     const intervalId = window.setInterval(() => {
       void loadPresence();
-    }, 30000);
+    }, 10000);
 
     return () => {
       window.clearInterval(intervalId);
@@ -96,8 +102,11 @@ export function AgentDashboards() {
   const buildFallbackPresenceMap = () => {
     const fallbackMap: Record<string, boolean> = {};
     for (const employee of allEmployees) {
-      const status = String(employee.status || 'active').toLowerCase();
-      fallbackMap[employee.id] = status !== 'inactive';
+      const email = String(employee.email || '').trim().toLowerCase();
+      fallbackMap[`id:${employee.id}`] = false;
+      if (email !== '') {
+        fallbackMap[`email:${email}`] = false;
+      }
     }
     return fallbackMap;
   };
@@ -112,14 +121,24 @@ export function AgentDashboards() {
     try {
       const { data, error } = await supabase
         .from('user_presence')
-        .select('user_id, status')
+        .select('user_id, status, is_online, email, employee')
         .neq('status', 'offline');
 
       if (error) throw error;
 
       const presenceMap: Record<string, boolean> = {};
       data?.forEach(presence => {
-        presenceMap[String(presence.user_id)] = true;
+        const status = String(presence.status || 'offline').toLowerCase();
+        const isOnline = Boolean(presence.is_online) || status !== 'offline';
+        if (presence.user_id !== undefined && presence.user_id !== null) {
+          presenceMap[`id:${String(presence.user_id)}`] = isOnline;
+        }
+
+        const emailRaw = presence?.employee?.email || presence?.email || '';
+        const email = String(emailRaw).trim().toLowerCase();
+        if (email !== '') {
+          presenceMap[`email:${email}`] = isOnline;
+        }
       });
 
       if (Object.keys(presenceMap).length === 0) {

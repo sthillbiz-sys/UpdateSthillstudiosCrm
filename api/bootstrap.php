@@ -381,6 +381,27 @@ function ensure_runtime_schema(): void {
 
     $pdo = db();
     $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS user_presence (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            email VARCHAR(191) NOT NULL,
+            name VARCHAR(191) NOT NULL,
+            role VARCHAR(64) NOT NULL DEFAULT "agent",
+            status VARCHAR(32) NOT NULL DEFAULT "available",
+            custom_message TEXT NULL,
+            is_on_call TINYINT(1) NOT NULL DEFAULT 0,
+            last_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_offline_at DATETIME NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY user_presence_user_id_unique (user_id),
+            INDEX user_presence_email_idx (email),
+            INDEX user_presence_status_idx (status),
+            INDEX user_presence_last_seen_idx (last_seen)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+    );
+
+    $pdo->exec(
         'CREATE TABLE IF NOT EXISTS activities (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id INT NOT NULL,
@@ -458,6 +479,38 @@ function ensure_runtime_schema(): void {
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
     );
+}
+
+function normalize_presence_status(?string $value): string {
+    $status = strtolower(trim((string) $value));
+    $allowed = ['available', 'busy', 'in_meeting', 'on_break', 'lunch', 'away', 'offline'];
+    if (in_array($status, $allowed, true)) {
+        return $status;
+    }
+    return 'available';
+}
+
+function presence_online_window_seconds(): int {
+    $raw = (int) env('PRESENCE_ONLINE_WINDOW_SECONDS', '75');
+    if ($raw < 30) {
+        return 30;
+    }
+    if ($raw > 600) {
+        return 600;
+    }
+    return $raw;
+}
+
+function is_presence_online(?string $status, ?string $lastSeen): bool {
+    if (normalize_presence_status($status) === 'offline') {
+        return false;
+    }
+    $lastSeenTs = $lastSeen ? strtotime($lastSeen) : false;
+    if ($lastSeenTs === false) {
+        return false;
+    }
+    $window = presence_online_window_seconds();
+    return $lastSeenTs >= (time() - $window);
 }
 
 function ensure_default_messages_conversation(): int {

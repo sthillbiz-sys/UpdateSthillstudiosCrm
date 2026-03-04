@@ -1,6 +1,6 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useAuth } from './auth';
-import { apiGet } from './api';
+import { apiGet, apiPost } from './api';
 
 export type PresenceStatus = 'available' | 'busy' | 'in_meeting' | 'on_break' | 'lunch' | 'away' | 'offline';
 
@@ -12,10 +12,13 @@ export interface UserPresence {
   is_on_call: boolean;
   last_activity: string;
   employee?: {
+    id?: number | null;
     full_name: string;
     email: string;
     assigned_color: string;
     role: string;
+    status?: string;
+    contact_info?: string;
   };
 }
 
@@ -29,15 +32,125 @@ type PresenceContextType = {
 
 const PresenceContext = createContext<PresenceContextType | undefined>(undefined);
 
-function toPresenceStatus(role: string): PresenceStatus {
-  if (!role) return 'offline';
-  return 'available';
+const HEARTBEAT_INTERVAL_MS = 15000;
+const REFRESH_INTERVAL_MS = 15000;
+
+function normalizePresenceStatus(value: unknown): PresenceStatus {
+  const status = String(value ?? '').trim().toLowerCase();
+  switch (status) {
+    case 'available':
+    case 'busy':
+    case 'in_meeting':
+    case 'on_break':
+    case 'lunch':
+    case 'away':
+    case 'offline':
+      return status;
+    default:
+      return 'available';
+  }
+}
+
+function mapPresenceRow(row: any): UserPresence {
+  const employeeName = row?.employee?.full_name || row?.name || row?.email || 'Team Member';
+  const employeeEmail = row?.employee?.email || row?.email || '';
+  return {
+    user_id: Number(row?.user_id || 0),
+    name: row?.name || employeeName,
+    status: normalizePresenceStatus(row?.status || 'offline'),
+    custom_message: String(row?.custom_message || ''),
+    is_on_call: Boolean(row?.is_on_call),
+    last_activity: row?.last_activity || row?.last_seen || new Date().toISOString(),
+    employee: {
+      id: row?.employee?.id ? Number(row.employee.id) : null,
+      full_name: employeeName,
+      email: employeeEmail,
+      assigned_color: row?.employee?.assigned_color || '#3B82F6',
+      role: row?.employee?.role || row?.role || 'employee',
+      status: row?.employee?.status || 'active',
+      contact_info: row?.employee?.contact_info || '',
+    },
+  };
 }
 
 export function PresenceProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [myPresence, setMyPresence] = useState<UserPresence | null>(null);
   const [teamPresence, setTeamPresence] = useState<UserPresence[]>([]);
+  const myPresenceRef = useRef<UserPresence | null>(null);
+
+  useEffect(() => {
+    myPresenceRef.current = myPresence;
+  }, [myPresence]);
+
+  const sendHeartbeat = useCallback(
+    async (status: PresenceStatus, customMessage: string, isOnCall: boolean) => {
+      if (!user) return;
+      await apiPost('/presence/heartbeat', {
+        status,
+        custom_message: customMessage,
+        is_on_call: isOnCall,
+      });
+    },
+    [user],
+  );
+
+  const refreshPresence = useCallback(async () => {
+    if (!user) {
+      setMyPresence(null);
+      setTeamPresence([]);
+      return;
+    }
+
+    try {
+      const rows = await apiGet<any[]>('/presence');
+      const mapped = Array.isArray(rows) ? rows.map(mapPresenceRow) : [];
+      const onlineOnly = mapped.filter((presence) => presence.status !== 'offline');
+      setTeamPresence(onlineOnly);
+
+      const mine =
+        mapped.find((presence) => presence.user_id === user.id) ||
+        onlineOnly.find((presence) => presence.employee?.email?.toLowerCase() === user.email.toLowerCase()) ||
+        null;
+
+      if (mine) {
+        setMyPresence(mine);
+      } else {
+        setMyPresence({
+          user_id: user.id,
+          name: user.name,
+          status: 'available',
+          custom_message: '',
+          is_on_call: false,
+          last_activity: new Date().toISOString(),
+          employee: {
+            full_name: user.name,
+            email: user.email,
+            assigned_color: '#3B82F6',
+            role: user.role || 'agent',
+          },
+        });
+      }
+    } catch (error) {
+      console.error('Error refreshing presence:', error);
+      const fallback: UserPresence = {
+        user_id: user.id,
+        name: user.name,
+        status: 'available',
+        custom_message: '',
+        is_on_call: false,
+        last_activity: new Date().toISOString(),
+        employee: {
+          full_name: user.name,
+          email: user.email,
+          assigned_color: '#3B82F6',
+          role: user.role || 'agent',
+        },
+      };
+      setMyPresence(fallback);
+      setTeamPresence([fallback]);
+    }
+  }, [user]);
 
   useEffect(() => {
     if (!user) {
@@ -46,104 +159,124 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const selfPresence: UserPresence = {
-      user_id: user.id,
-      name: user.name,
-      status: 'available',
-      custom_message: '',
-      is_on_call: false,
-      last_activity: new Date().toISOString(),
-      employee: {
-        full_name: user.name,
-        email: user.email,
-        assigned_color: '#3B82F6',
-        role: user.role || 'agent',
-      },
+    let cancelled = false;
+    const boot = async () => {
+      try {
+        await sendHeartbeat('available', '', false);
+      } catch (error) {
+        console.error('Error sending initial presence heartbeat:', error);
+      }
+      if (!cancelled) {
+        await refreshPresence();
+      }
+    };
+    void boot();
+
+    const heartbeatId = window.setInterval(() => {
+      const current = myPresenceRef.current;
+      const status = normalizePresenceStatus(current?.status || 'available');
+      const customMessage = current?.custom_message || '';
+      const isOnCall = Boolean(current?.is_on_call);
+      void sendHeartbeat(status === 'offline' ? 'away' : status, customMessage, isOnCall);
+    }, HEARTBEAT_INTERVAL_MS);
+
+    const refreshId = window.setInterval(() => {
+      void refreshPresence();
+    }, REFRESH_INTERVAL_MS);
+
+    const onFocus = () => {
+      const current = myPresenceRef.current;
+      const status = normalizePresenceStatus(current?.status || 'available');
+      void sendHeartbeat(status === 'offline' ? 'away' : status, current?.custom_message || '', Boolean(current?.is_on_call))
+        .then(() => refreshPresence())
+        .catch(() => {
+          void refreshPresence();
+        });
     };
 
-    setMyPresence(selfPresence);
-  }, [user]);
-
-  const refreshPresence = async () => {
-    if (!user) {
-      setTeamPresence([]);
-      return;
-    }
-
-    try {
-      const employees = await apiGet<Array<{ id: number; name: string; email?: string; role?: string }>>('/employees');
-
-      const mapped = employees.map((employee) => ({
-        user_id: Number(employee.id),
-        name: employee.name,
-        status: toPresenceStatus(employee.role || ''),
-        custom_message: '',
-        is_on_call: false,
-        last_activity: new Date().toISOString(),
-        employee: {
-          full_name: employee.name,
-          email: employee.email || '',
-          assigned_color: '#3B82F6',
-          role: employee.role || 'agent',
-        },
-      }));
-
-      const deduped = new Map<number, UserPresence>();
-      mapped.forEach((entry) => {
-        deduped.set(entry.user_id, entry);
-      });
-
-      if (myPresence) {
-        deduped.set(myPresence.user_id, myPresence);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        onFocus();
       }
+    };
 
-      setTeamPresence(Array.from(deduped.values()));
-    } catch {
-      // Graceful fallback in PHP deployments without realtime presence backend.
-      setTeamPresence(myPresence ? [myPresence] : []);
-    }
-  };
-
-  useEffect(() => {
-    void refreshPresence();
-    const id = window.setInterval(() => {
-      void refreshPresence();
-    }, 60000);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
-      window.clearInterval(id);
+      cancelled = true;
+      window.clearInterval(heartbeatId);
+      window.clearInterval(refreshId);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [user, myPresence?.status, myPresence?.is_on_call]);
+  }, [user, refreshPresence, sendHeartbeat]);
 
-  const updatePresence = async (status: PresenceStatus, customMessage = '') => {
-    if (!myPresence) return;
-    const next = {
-      ...myPresence,
-      status,
-      custom_message: customMessage,
-      last_activity: new Date().toISOString(),
-    };
-    setMyPresence(next);
-    setTeamPresence((prev) => {
-      const withoutSelf = prev.filter((p) => p.user_id !== next.user_id);
-      return [next, ...withoutSelf];
-    });
-  };
+  const updatePresence = useCallback(
+    async (status: PresenceStatus, customMessage = '') => {
+      if (!user) return;
+      const normalizedStatus = normalizePresenceStatus(status);
+      const next: UserPresence = {
+        user_id: user.id,
+        name: myPresenceRef.current?.name || user.name,
+        status: normalizedStatus,
+        custom_message: customMessage,
+        is_on_call: Boolean(myPresenceRef.current?.is_on_call),
+        last_activity: new Date().toISOString(),
+        employee: myPresenceRef.current?.employee || {
+          full_name: user.name,
+          email: user.email,
+          assigned_color: '#3B82F6',
+          role: user.role || 'agent',
+        },
+      };
+      setMyPresence(next);
+      myPresenceRef.current = next;
 
-  const setOnCall = async (isOnCall: boolean) => {
-    if (!myPresence) return;
-    const next: UserPresence = {
-      ...myPresence,
-      is_on_call: isOnCall,
-      status: isOnCall ? 'busy' : myPresence.status === 'busy' ? 'available' : myPresence.status,
-      last_activity: new Date().toISOString(),
-    };
-    setMyPresence(next);
-    setTeamPresence((prev) => {
-      const withoutSelf = prev.filter((p) => p.user_id !== next.user_id);
-      return [next, ...withoutSelf];
-    });
-  };
+      try {
+        await sendHeartbeat(normalizedStatus === 'offline' ? 'away' : normalizedStatus, customMessage, next.is_on_call);
+      } finally {
+        await refreshPresence();
+      }
+    },
+    [refreshPresence, sendHeartbeat, user],
+  );
+
+  const setOnCall = useCallback(
+    async (isOnCall: boolean) => {
+      if (!user) return;
+      const current = myPresenceRef.current;
+      const nextStatus = isOnCall
+        ? 'busy'
+        : normalizePresenceStatus(current?.status || 'available') === 'busy'
+          ? 'available'
+          : normalizePresenceStatus(current?.status || 'available');
+
+      const next: UserPresence = {
+        user_id: user.id,
+        name: current?.name || user.name,
+        status: nextStatus,
+        custom_message: current?.custom_message || '',
+        is_on_call: isOnCall,
+        last_activity: new Date().toISOString(),
+        employee: current?.employee || {
+          full_name: user.name,
+          email: user.email,
+          assigned_color: '#3B82F6',
+          role: user.role || 'agent',
+        },
+      };
+      setMyPresence(next);
+      myPresenceRef.current = next;
+
+      try {
+        await sendHeartbeat(nextStatus, next.custom_message, isOnCall);
+      } finally {
+        await refreshPresence();
+      }
+    },
+    [refreshPresence, sendHeartbeat, user],
+  );
 
   const value = useMemo(
     () => ({
@@ -153,7 +286,7 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
       setOnCall,
       refreshPresence,
     }),
-    [myPresence, teamPresence],
+    [myPresence, refreshPresence, setOnCall, teamPresence, updatePresence],
   );
 
   return <PresenceContext.Provider value={value}>{children}</PresenceContext.Provider>;

@@ -77,6 +77,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const signOut = useCallback(async () => {
+    try {
+      await apiPost('/presence/offline', {});
+    } catch {
+      // Presence cleanup is best-effort.
+    }
     clearStoredSession();
     setToken('');
     setUser(null);

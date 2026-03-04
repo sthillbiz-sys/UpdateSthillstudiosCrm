@@ -25,7 +25,7 @@ function tableToRoute(table: string): string {
     case 'call_history':
       return '/calls';
     case 'user_presence':
-      return '/employees';
+      return '/presence';
     case 'employee_settings':
       return '/employee-settings';
     default:
@@ -232,24 +232,16 @@ class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
       }
 
       if (this.table === 'user_presence') {
-        const employees = await apiGet<any[]>('/employees');
-        const mapped = employees.map((row) => {
-          const employee = normalizeEmployeeRow(row);
-          return {
-          user_id: employee.id,
-          name: employee.full_name || employee.email || 'Team Member',
-          status: 'available',
-          custom_message: '',
-          is_on_call: false,
-          last_activity: new Date().toISOString(),
-          employee: {
-            full_name: employee.full_name || employee.email || 'Team Member',
-            email: employee.email || '',
-            assigned_color: employee.assigned_color || '#3B82F6',
-            role: employee.role || 'employee',
-          },
-        };
-      });
+        const rows = await apiGet<any[]>('/presence');
+        const mapped = rows.map((row) => ({
+          ...row,
+          user_id:
+            row?.user_id !== undefined && row?.user_id !== null && row?.user_id !== ''
+              ? String(row.user_id)
+              : '',
+          status: String(row?.status || 'offline'),
+          is_online: Boolean(row?.is_online),
+        }));
         return this.finalizeResult(mapped);
       }
 

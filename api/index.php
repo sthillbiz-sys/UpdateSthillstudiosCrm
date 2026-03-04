@@ -319,6 +319,167 @@ try {
         ]);
     }
 
+    if ($route === 'presence' && $method === 'GET') {
+        $stmt = db()->query(
+            'SELECT
+                p.user_id,
+                p.email,
+                p.name,
+                p.role,
+                p.status,
+                p.custom_message,
+                p.is_on_call,
+                p.last_seen,
+                p.last_offline_at,
+                p.updated_at,
+                e.id AS employee_id,
+                e.name AS employee_name,
+                e.email AS employee_email,
+                e.role AS employee_role,
+                e.status AS employee_status,
+                e.contact_info AS employee_contact_info
+             FROM user_presence p
+             LEFT JOIN employees e ON LOWER(e.email) = LOWER(p.email)
+             ORDER BY p.last_seen DESC'
+        );
+        $rows = $stmt->fetchAll();
+
+        $payload = array_map(static function (array $row): array {
+            $online = is_presence_online((string) ($row['status'] ?? ''), (string) ($row['last_seen'] ?? ''));
+            $status = $online ? normalize_presence_status((string) ($row['status'] ?? 'available')) : 'offline';
+
+            $employeeEmail = trim((string) ($row['employee_email'] ?? ''));
+            $presenceEmail = trim((string) ($row['email'] ?? ''));
+            $effectiveEmail = $employeeEmail !== '' ? $employeeEmail : $presenceEmail;
+
+            $employeeName = trim((string) ($row['employee_name'] ?? ''));
+            $presenceName = trim((string) ($row['name'] ?? ''));
+            $effectiveName = $employeeName !== '' ? $employeeName : $presenceName;
+
+            $employeeRole = trim((string) ($row['employee_role'] ?? ''));
+            $presenceRole = trim((string) ($row['role'] ?? ''));
+            $effectiveRole = $employeeRole !== '' ? $employeeRole : $presenceRole;
+
+            return [
+                'user_id' => (int) ($row['user_id'] ?? 0),
+                'email' => $presenceEmail,
+                'name' => $presenceName,
+                'status' => $status,
+                'custom_message' => (string) ($row['custom_message'] ?? ''),
+                'is_on_call' => ((int) ($row['is_on_call'] ?? 0)) === 1,
+                'last_activity' => (string) ($row['last_seen'] ?? ''),
+                'last_seen' => (string) ($row['last_seen'] ?? ''),
+                'is_online' => $online,
+                'employee' => [
+                    'id' => isset($row['employee_id']) ? (int) $row['employee_id'] : null,
+                    'full_name' => $effectiveName,
+                    'email' => $effectiveEmail,
+                    'assigned_color' => '#3B82F6',
+                    'role' => $effectiveRole,
+                    'status' => (string) ($row['employee_status'] ?? 'active'),
+                    'contact_info' => (string) ($row['employee_contact_info'] ?? ''),
+                ],
+            ];
+        }, $rows);
+
+        json_response($payload);
+    }
+
+    if ($route === 'presence/heartbeat' && $method === 'POST') {
+        $input = read_json_body();
+        $status = normalize_presence_status((string) ($input['status'] ?? 'available'));
+        if ($status === 'offline') {
+            $status = 'away';
+        }
+        $customMessage = trim((string) ($input['custom_message'] ?? ''));
+        if (strlen($customMessage) > 500) {
+            $customMessage = substr($customMessage, 0, 500);
+        }
+
+        $isOnCallInput = $input['is_on_call'] ?? false;
+        $isOnCall = false;
+        if (is_bool($isOnCallInput)) {
+            $isOnCall = $isOnCallInput;
+        } else {
+            $isOnCall = in_array(strtolower((string) $isOnCallInput), ['1', 'true', 'yes', 'on'], true);
+        }
+
+        $presenceName = trim((string) ($authUser['name'] ?? ''));
+        if ($presenceName === '') {
+            $presenceName = explode('@', (string) ($authUser['email'] ?? ''))[0] ?? 'User';
+        }
+        $presenceRole = normalize_employee_role_from_user_role((string) ($authUser['role'] ?? 'agent'));
+        $presenceEmail = strtolower(trim((string) ($authUser['email'] ?? '')));
+        if ($presenceEmail === '') {
+            json_response(['error' => 'Invalid auth context'], 401);
+        }
+
+        $stmt = db()->prepare(
+            'INSERT INTO user_presence (
+                user_id, email, name, role, status, custom_message, is_on_call, last_seen, last_offline_at, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NULL, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE
+                email = VALUES(email),
+                name = VALUES(name),
+                role = VALUES(role),
+                status = VALUES(status),
+                custom_message = VALUES(custom_message),
+                is_on_call = VALUES(is_on_call),
+                last_seen = NOW(),
+                last_offline_at = NULL,
+                updated_at = NOW()'
+        );
+        $stmt->execute([
+            $authUserId,
+            $presenceEmail,
+            $presenceName,
+            $presenceRole,
+            $status,
+            $customMessage !== '' ? $customMessage : null,
+            $isOnCall ? 1 : 0,
+        ]);
+
+        json_response(['success' => true]);
+    }
+
+    if ($route === 'presence/offline' && $method === 'POST') {
+        $presenceName = trim((string) ($authUser['name'] ?? ''));
+        if ($presenceName === '') {
+            $presenceName = explode('@', (string) ($authUser['email'] ?? ''))[0] ?? 'User';
+        }
+        $presenceRole = normalize_employee_role_from_user_role((string) ($authUser['role'] ?? 'agent'));
+        $presenceEmail = strtolower(trim((string) ($authUser['email'] ?? '')));
+        if ($presenceEmail === '') {
+            json_response(['error' => 'Invalid auth context'], 401);
+        }
+
+        $stmt = db()->prepare(
+            'INSERT INTO user_presence (
+                user_id, email, name, role, status, custom_message, is_on_call, last_seen, last_offline_at, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), NOW())
+             ON DUPLICATE KEY UPDATE
+                email = VALUES(email),
+                name = VALUES(name),
+                role = VALUES(role),
+                status = VALUES(status),
+                custom_message = NULL,
+                is_on_call = 0,
+                last_offline_at = NOW(),
+                updated_at = NOW()'
+        );
+        $stmt->execute([
+            $authUserId,
+            $presenceEmail,
+            $presenceName,
+            $presenceRole,
+            'offline',
+            null,
+            0,
+        ]);
+
+        json_response(['success' => true]);
+    }
+
     if ($route === 'activities' && $method === 'GET') {
         $targetUserId = $authUserId;
         if (isset($_GET['user_id'])) {
