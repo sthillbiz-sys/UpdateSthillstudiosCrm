@@ -293,6 +293,12 @@ try {
     $authUserId = (int) ($authUser['id'] ?? 0);
     $authRole = strtolower((string) ($authUser['role'] ?? 'agent'));
     $canViewAllCalls = in_array($authRole, ['admin', 'manager'], true);
+    $normalizeActivityRow = static function (array $row): array {
+        $row['id'] = (int) ($row['id'] ?? 0);
+        $row['user_id'] = (int) ($row['user_id'] ?? 0);
+        $row['completed'] = ((int) ($row['completed'] ?? 0)) === 1;
+        return $row;
+    };
 
     if ($route === 'twilio/access-token' && $method === 'POST') {
         $userId = $authUserId;
@@ -307,6 +313,206 @@ try {
             'identity' => $identity,
             'expiresIn' => twilio_access_token_ttl_seconds(),
         ]);
+    }
+
+    if ($route === 'activities' && $method === 'GET') {
+        $targetUserId = $authUserId;
+        if (isset($_GET['user_id'])) {
+            $requestedUserId = (int) $_GET['user_id'];
+            if ($requestedUserId > 0) {
+                $targetUserId = $requestedUserId;
+            }
+        }
+
+        if (!$canViewAllCalls && $targetUserId !== $authUserId) {
+            json_response(['error' => 'Forbidden'], 403);
+        }
+
+        $stmt = db()->prepare(
+            'SELECT *
+             FROM activities
+             WHERE user_id = ?
+             ORDER BY due_date IS NULL ASC, due_date ASC, created_at DESC'
+        );
+        $stmt->execute([$targetUserId]);
+        $rows = $stmt->fetchAll();
+        $rows = array_map($normalizeActivityRow, $rows);
+        json_response($rows);
+    }
+
+    if ($route === 'activities' && $method === 'POST') {
+        $input = read_json_body();
+        $userId = isset($input['user_id']) ? (int) $input['user_id'] : $authUserId;
+        if ($userId <= 0) {
+            json_response(['error' => 'Invalid user'], 400);
+        }
+        if (!$canViewAllCalls && $userId !== $authUserId) {
+            json_response(['error' => 'Forbidden'], 403);
+        }
+
+        $title = trim((string) ($input['title'] ?? ''));
+        if ($title === '') {
+            json_response(['error' => 'Activity title is required'], 400);
+        }
+
+        $dueDate = null;
+        $dueDateRaw = trim((string) ($input['due_date'] ?? ''));
+        if ($dueDateRaw !== '') {
+            try {
+                $dueDate = (new DateTimeImmutable($dueDateRaw))->format('Y-m-d H:i:s');
+            } catch (Throwable $e) {
+                json_response(['error' => 'Invalid due_date'], 400);
+            }
+        }
+
+        $completedRaw = $input['completed'] ?? false;
+        if (is_bool($completedRaw)) {
+            $completed = $completedRaw ? 1 : 0;
+        } else {
+            $completed = in_array(strtolower((string) $completedRaw), ['1', 'true', 'yes', 'on'], true) ? 1 : 0;
+        }
+
+        $stmt = db()->prepare(
+            'INSERT INTO activities (
+                user_id, related_to_type, related_to_id, type, title, description, due_date, completed, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
+        );
+        $stmt->execute([
+            $userId,
+            trim((string) ($input['related_to_type'] ?? 'contact')) ?: 'contact',
+            trim((string) ($input['related_to_id'] ?? '')) ?: null,
+            trim((string) ($input['type'] ?? 'task')) ?: 'task',
+            $title,
+            trim((string) ($input['description'] ?? '')) ?: null,
+            $dueDate,
+            $completed,
+        ]);
+
+        $id = (int) db()->lastInsertId();
+        $select = db()->prepare('SELECT * FROM activities WHERE id = ? LIMIT 1');
+        $select->execute([$id]);
+        $row = $select->fetch();
+        if (!$row) {
+            json_response(['error' => 'Failed to create activity'], 500);
+        }
+        $normalizedRow = $normalizeActivityRow($row);
+        json_response(['id' => $id, 'row' => $normalizedRow, 'data' => $normalizedRow]);
+    }
+
+    if (preg_match('#^activities/(\d+)$#', $route, $matches) === 1 && $method === 'PUT') {
+        $id = (int) $matches[1];
+        $input = read_json_body();
+
+        $check = db()->prepare('SELECT user_id FROM activities WHERE id = ? LIMIT 1');
+        $check->execute([$id]);
+        $existing = $check->fetch();
+        if (!$existing) {
+            json_response(['error' => 'Activity not found'], 404);
+        }
+        $ownerUserId = (int) ($existing['user_id'] ?? 0);
+        if (!$canViewAllCalls && $ownerUserId !== $authUserId) {
+            json_response(['error' => 'Forbidden'], 403);
+        }
+
+        $fields = [];
+        $params = [];
+
+        if (array_key_exists('user_id', $input)) {
+            $userId = (int) $input['user_id'];
+            if ($userId <= 0) {
+                json_response(['error' => 'Invalid user'], 400);
+            }
+            if (!$canViewAllCalls && $userId !== $authUserId) {
+                json_response(['error' => 'Forbidden'], 403);
+            }
+            $fields[] = 'user_id = ?';
+            $params[] = $userId;
+        }
+        if (array_key_exists('related_to_type', $input)) {
+            $fields[] = 'related_to_type = ?';
+            $params[] = trim((string) ($input['related_to_type'] ?? 'contact')) ?: 'contact';
+        }
+        if (array_key_exists('related_to_id', $input)) {
+            $fields[] = 'related_to_id = ?';
+            $params[] = trim((string) ($input['related_to_id'] ?? '')) ?: null;
+        }
+        if (array_key_exists('type', $input)) {
+            $fields[] = 'type = ?';
+            $params[] = trim((string) ($input['type'] ?? 'task')) ?: 'task';
+        }
+        if (array_key_exists('title', $input)) {
+            $title = trim((string) ($input['title'] ?? ''));
+            if ($title === '') {
+                json_response(['error' => 'Activity title is required'], 400);
+            }
+            $fields[] = 'title = ?';
+            $params[] = $title;
+        }
+        if (array_key_exists('description', $input)) {
+            $fields[] = 'description = ?';
+            $params[] = trim((string) ($input['description'] ?? '')) ?: null;
+        }
+        if (array_key_exists('due_date', $input)) {
+            $dueDateRaw = trim((string) ($input['due_date'] ?? ''));
+            if ($dueDateRaw === '') {
+                $fields[] = 'due_date = ?';
+                $params[] = null;
+            } else {
+                try {
+                    $dueDate = (new DateTimeImmutable($dueDateRaw))->format('Y-m-d H:i:s');
+                } catch (Throwable $e) {
+                    json_response(['error' => 'Invalid due_date'], 400);
+                }
+                $fields[] = 'due_date = ?';
+                $params[] = $dueDate;
+            }
+        }
+        if (array_key_exists('completed', $input)) {
+            $completedRaw = $input['completed'];
+            if (is_bool($completedRaw)) {
+                $completed = $completedRaw ? 1 : 0;
+            } else {
+                $completed = in_array(strtolower((string) $completedRaw), ['1', 'true', 'yes', 'on'], true) ? 1 : 0;
+            }
+            $fields[] = 'completed = ?';
+            $params[] = $completed;
+        }
+
+        if (count($fields) === 0) {
+            json_response(['error' => 'No updatable fields provided'], 400);
+        }
+
+        $params[] = $id;
+        $sql = 'UPDATE activities SET ' . implode(', ', $fields) . ', updated_at = NOW() WHERE id = ?';
+        $stmt = db()->prepare($sql);
+        $stmt->execute($params);
+
+        $select = db()->prepare('SELECT * FROM activities WHERE id = ? LIMIT 1');
+        $select->execute([$id]);
+        $row = $select->fetch();
+        if (!$row) {
+            json_response(['error' => 'Activity not found'], 404);
+        }
+        $normalizedRow = $normalizeActivityRow($row);
+        json_response(['success' => true, 'row' => $normalizedRow, 'data' => $normalizedRow]);
+    }
+
+    if (preg_match('#^activities/(\d+)$#', $route, $matches) === 1 && $method === 'DELETE') {
+        $id = (int) $matches[1];
+        $check = db()->prepare('SELECT user_id FROM activities WHERE id = ? LIMIT 1');
+        $check->execute([$id]);
+        $existing = $check->fetch();
+        if (!$existing) {
+            json_response(['error' => 'Activity not found'], 404);
+        }
+        $ownerUserId = (int) ($existing['user_id'] ?? 0);
+        if (!$canViewAllCalls && $ownerUserId !== $authUserId) {
+            json_response(['error' => 'Forbidden'], 403);
+        }
+
+        $stmt = db()->prepare('DELETE FROM activities WHERE id = ?');
+        $stmt->execute([$id]);
+        json_response(['success' => true]);
     }
 
     if ($route === 'messages/conversations' && $method === 'GET') {

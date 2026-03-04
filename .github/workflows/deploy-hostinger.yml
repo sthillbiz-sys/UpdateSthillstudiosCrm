@@ -28,6 +28,27 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run MySQL migrations
+        env:
+          MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
+          MYSQL_PORT: ${{ secrets.MYSQL_PORT }}
+          MYSQL_USER: ${{ secrets.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
+          MYSQL_SSL: ${{ secrets.MYSQL_SSL }}
+          MYSQL_SSL_CA_BASE64: ${{ secrets.MYSQL_SSL_CA_BASE64 }}
+        run: |
+          set -eu
+          if [ -z "${MYSQL_HOST:-}" ]; then
+            echo "Missing MYSQL_HOST."
+            exit 1
+          fi
+          if [ -z "${MYSQL_USER:-}" ] || [ -z "${MYSQL_PASSWORD:-}" ] || [ -z "${MYSQL_DATABASE:-}" ]; then
+            echo "Missing required MySQL credentials (MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE)."
+            exit 1
+          fi
+          npm run migrate:latest
+
       - name: Build app assets
         run: npm run build
 
@@ -230,7 +251,7 @@ jobs:
 
             echo "[deploy] PHP-only runtime mode enabled (no remote Node/npm required)"
             echo "[deploy] skipping remote npm install, migrations, and Node process actions"
-            echo "[deploy] ensure MySQL schema/migrations are applied separately before first release"
+            echo "[deploy] MySQL migrations are expected to run in GitHub Actions before deploy"
 
             echo "[deploy] probing API health endpoints"
             API_PROBE_BASE="https://sthillstudios.com"

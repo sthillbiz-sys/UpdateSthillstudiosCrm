@@ -304,6 +304,26 @@ function ensure_runtime_schema(): void {
 
     $pdo = db();
     $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS activities (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            related_to_type VARCHAR(64) NOT NULL DEFAULT "contact",
+            related_to_id VARCHAR(64) NULL,
+            type VARCHAR(32) NOT NULL DEFAULT "task",
+            title VARCHAR(255) NOT NULL,
+            description TEXT NULL,
+            due_date DATETIME NULL,
+            completed TINYINT(1) NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX activities_user_id_idx (user_id),
+            INDEX activities_due_date_idx (due_date),
+            INDEX activities_completed_idx (completed),
+            INDEX activities_user_completed_idx (user_id, completed)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+    );
+
+    $pdo->exec(
         'CREATE TABLE IF NOT EXISTS break_entries (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id INT NOT NULL,
