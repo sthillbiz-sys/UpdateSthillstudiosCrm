@@ -24,6 +24,80 @@ interface Meeting {
   created_at: string;
 }
 
+const PRIMARY_JITSI_DOMAIN = 'meet.sthillstudios.com';
+const FALLBACK_JITSI_DOMAIN = 'meet.jit.si';
+const JITSI_SCRIPT_TIMEOUT_MS = 10000;
+
+function loadJitsiExternalApi(domain: string): Promise<boolean> {
+  if (typeof window === 'undefined') {
+    return Promise.resolve(false);
+  }
+  if (window.JitsiMeetExternalAPI) {
+    return Promise.resolve(true);
+  }
+
+  const scriptSrc = `https://${domain}/external_api.js`;
+  const existing = document.querySelector<HTMLScriptElement>(`script[src="${scriptSrc}"]`);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const timeoutId = window.setTimeout(() => done(Boolean(window.JitsiMeetExternalAPI)), JITSI_SCRIPT_TIMEOUT_MS);
+    const cleanup = () => window.clearTimeout(timeoutId);
+
+    if (existing) {
+      if (window.JitsiMeetExternalAPI) {
+        cleanup();
+        done(true);
+        return;
+      }
+      existing.addEventListener(
+        'load',
+        () => {
+          cleanup();
+          done(Boolean(window.JitsiMeetExternalAPI));
+        },
+        { once: true },
+      );
+      existing.addEventListener(
+        'error',
+        () => {
+          cleanup();
+          done(false);
+        },
+        { once: true },
+      );
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = scriptSrc;
+    script.async = true;
+    script.onload = () => {
+      cleanup();
+      done(Boolean(window.JitsiMeetExternalAPI));
+    };
+    script.onerror = () => {
+      cleanup();
+      done(false);
+    };
+    document.head.appendChild(script);
+  });
+}
+
+function normalizeRoomNameForDomain(roomName: string, domain: string): string {
+  const cleanRoom = roomName.trim() || 'SthillStudiosMain';
+  if (domain === FALLBACK_JITSI_DOMAIN) {
+    return `SthillStudios-${cleanRoom}`;
+  }
+  return cleanRoom;
+}
+
 export function Meetings() {
   const [activeTab, setActiveTab] = useState<'schedule' | 'join'>('join');
   const [showQuickCall, setShowQuickCall] = useState(false);
@@ -32,6 +106,7 @@ export function Meetings() {
   const [selectedRoomName, setSelectedRoomName] = useState('SthillStudiosMain');
   const [roomInput, setRoomInput] = useState('');
   const [inMeeting, setInMeeting] = useState(false);
+  const [jitsiDomain, setJitsiDomain] = useState(PRIMARY_JITSI_DOMAIN);
   const [jitsiLoaded, setJitsiLoaded] = useState(false);
   const [jitsiError, setJitsiError] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
@@ -51,25 +126,37 @@ export function Meetings() {
   });
 
   useEffect(() => {
-    fetchMeetings();
+    let cancelled = false;
 
-    const checkJitsiLoad = setInterval(() => {
-      if (window.JitsiMeetExternalAPI) {
+    const init = async () => {
+      await fetchMeetings();
+
+      const primaryLoaded = await loadJitsiExternalApi(PRIMARY_JITSI_DOMAIN);
+      if (cancelled) return;
+      if (primaryLoaded) {
+        setJitsiDomain(PRIMARY_JITSI_DOMAIN);
         setJitsiLoaded(true);
-        clearInterval(checkJitsiLoad);
+        setJitsiError(false);
+        return;
       }
-    }, 100);
 
-    const timeout = setTimeout(() => {
-      clearInterval(checkJitsiLoad);
-      if (!window.JitsiMeetExternalAPI) {
-        setJitsiError(true);
+      const fallbackLoaded = await loadJitsiExternalApi(FALLBACK_JITSI_DOMAIN);
+      if (cancelled) return;
+      if (fallbackLoaded) {
+        setJitsiDomain(FALLBACK_JITSI_DOMAIN);
+        setJitsiLoaded(true);
+        setJitsiError(false);
+        return;
       }
-    }, 10000);
+
+      setJitsiLoaded(false);
+      setJitsiError(true);
+    };
+
+    void init();
 
     return () => {
-      clearInterval(checkJitsiLoad);
-      clearTimeout(timeout);
+      cancelled = true;
     };
   }, []);
 
@@ -104,7 +191,7 @@ export function Meetings() {
       room_name: roomName,
       status: 'scheduled',
       attendees: attendeesArray,
-      created_by: user?.id,
+      created_by_user_id: user?.id,
     });
 
     if (!error) {
@@ -130,9 +217,24 @@ export function Meetings() {
     }
   };
 
-  const handleJoinMeeting = (roomName: string) => {
-    setSelectedRoomName(roomName);
+  const openQuickCallFallback = (roomName: string) => {
+    setSelectedRoomName(roomName.trim() || 'SthillStudiosMain');
     setShowQuickCall(true);
+  };
+
+  const joinMeetingRoom = (roomName: string) => {
+    const room = roomName.trim() || 'SthillStudiosMain';
+    setSelectedRoomName(room);
+    setRoomInput(room);
+    setActiveTab('join');
+
+    if (jitsiLoaded) {
+      setShowQuickCall(false);
+      setInMeeting(true);
+      return;
+    }
+
+    openQuickCallFallback(room);
   };
 
   const startJitsiMeeting = (roomName: string) => {
@@ -153,9 +255,10 @@ export function Meetings() {
     }
 
     try {
-      const domain = 'meet.sthillstudios.com';
+      const domain = jitsiDomain;
+      const normalizedRoomName = normalizeRoomNameForDomain(roomName, domain);
       const options = {
-        roomName: roomName,
+        roomName: normalizedRoomName,
         parentNode: jitsiContainerRef.current,
         width: '100%',
         height: '100%',
@@ -260,6 +363,14 @@ export function Meetings() {
                 </div>
               )}
 
+              {jitsiLoaded && jitsiDomain === FALLBACK_JITSI_DOMAIN && (
+                <div className="bg-blue-900/50 border border-blue-500 rounded-lg p-4 mb-6 text-center">
+                  <p className="text-blue-100 text-sm">
+                    Connected with backup meeting provider (meet.jit.si).
+                  </p>
+                </div>
+              )}
+
               <div className="max-w-md mx-auto space-y-6">
                 <input
                   type="text"
@@ -272,6 +383,11 @@ export function Meetings() {
                 <button
                   onClick={() => {
                     if (!jitsiLoaded) {
+                      const room = roomInput.trim() || 'SthillStudiosMain';
+                      if (jitsiError) {
+                        openQuickCallFallback(room);
+                        return;
+                      }
                       alert('Meeting system is still loading. Please wait a moment and try again.');
                       return;
                     }
@@ -293,7 +409,12 @@ export function Meetings() {
                     </>
                   ) : jitsiError ? (
                     <>
-                      Join meeting (Video disabled)
+                      Join meeting (Fallback mode)
+                      <Video className="w-6 h-6" />
+                    </>
+                  ) : jitsiDomain === FALLBACK_JITSI_DOMAIN ? (
+                    <>
+                      Join meeting (Backup provider)
                       <Video className="w-6 h-6" />
                     </>
                   ) : (
@@ -480,7 +601,7 @@ export function Meetings() {
                     )}
 
                     <button
-                      onClick={() => handleJoinMeeting(meeting.room_name)}
+                      onClick={() => joinMeetingRoom(meeting.room_name)}
                       className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
                     >
                       <ExternalLink className="w-4 h-4" />
