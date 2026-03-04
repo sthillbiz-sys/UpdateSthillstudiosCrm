@@ -321,6 +321,103 @@ function ensure_runtime_schema(): void {
             INDEX break_entries_status_idx (status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
     );
+
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS conversations (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(191) NOT NULL,
+            is_group TINYINT(1) NOT NULL DEFAULT 1,
+            created_by_user_id INT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX conversations_updated_at_idx (updated_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+    );
+
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS conversation_participants (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            conversation_id INT NOT NULL,
+            user_id INT NOT NULL,
+            joined_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_read_at DATETIME NULL,
+            UNIQUE KEY conversation_participants_conversation_user_unique (conversation_id, user_id),
+            INDEX conversation_participants_user_id_idx (user_id),
+            CONSTRAINT conversation_participants_conversation_fk
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+    );
+
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS messages (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            conversation_id INT NOT NULL,
+            sender_user_id INT NOT NULL,
+            content TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX messages_conversation_created_at_idx (conversation_id, created_at),
+            INDEX messages_sender_user_id_idx (sender_user_id),
+            CONSTRAINT messages_conversation_fk
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+    );
+}
+
+function ensure_default_messages_conversation(): int {
+    static $cachedConversationId = null;
+    if (is_int($cachedConversationId) && $cachedConversationId > 0) {
+        return $cachedConversationId;
+    }
+
+    $pdo = db();
+    $select = $pdo->prepare('SELECT id FROM conversations WHERE name = ? LIMIT 1');
+    $select->execute(['Team General']);
+    $row = $select->fetch();
+
+    if ($row) {
+        $cachedConversationId = (int) $row['id'];
+    } else {
+        $seedUserId = (int) $pdo->query('SELECT id FROM users ORDER BY id ASC LIMIT 1')->fetchColumn();
+        $insert = $pdo->prepare(
+            'INSERT INTO conversations (name, is_group, created_by_user_id, created_at, updated_at)
+             VALUES (?, ?, ?, NOW(), NOW())'
+        );
+        $insert->execute(['Team General', 1, $seedUserId > 0 ? $seedUserId : null]);
+        $cachedConversationId = (int) $pdo->lastInsertId();
+    }
+
+    if ($cachedConversationId > 0) {
+        $users = $pdo->query('SELECT id FROM users')->fetchAll();
+        $linkParticipant = $pdo->prepare(
+            'INSERT IGNORE INTO conversation_participants (conversation_id, user_id, joined_at, last_read_at)
+             VALUES (?, ?, NOW(), NOW())'
+        );
+
+        foreach ($users as $userRow) {
+            $userId = (int) ($userRow['id'] ?? 0);
+            if ($userId <= 0) {
+                continue;
+            }
+            $linkParticipant->execute([$cachedConversationId, $userId]);
+        }
+    }
+
+    return $cachedConversationId;
+}
+
+function user_can_access_conversation(int $conversationId, int $userId): bool {
+    if ($conversationId <= 0 || $userId <= 0) {
+        return false;
+    }
+
+    $stmt = db()->prepare(
+        'SELECT 1
+         FROM conversation_participants
+         WHERE conversation_id = ? AND user_id = ?
+         LIMIT 1'
+    );
+    $stmt->execute([$conversationId, $userId]);
+    return (bool) $stmt->fetchColumn();
 }
 
 function xml_escape(string $value): string {

@@ -309,6 +309,196 @@ try {
         ]);
     }
 
+    if ($route === 'messages/conversations' && $method === 'GET') {
+        ensure_default_messages_conversation();
+
+        $conversationsStmt = db()->prepare(
+            'SELECT
+                c.id,
+                c.name,
+                c.updated_at,
+                cp.last_read_at,
+                (
+                    SELECT COUNT(*)
+                    FROM conversation_participants cp2
+                    WHERE cp2.conversation_id = c.id
+                ) AS participant_count,
+                (
+                    SELECT m.content
+                    FROM messages m
+                    WHERE m.conversation_id = c.id
+                    ORDER BY m.created_at DESC, m.id DESC
+                    LIMIT 1
+                ) AS last_message,
+                (
+                    SELECT m.created_at
+                    FROM messages m
+                    WHERE m.conversation_id = c.id
+                    ORDER BY m.created_at DESC, m.id DESC
+                    LIMIT 1
+                ) AS last_message_at
+             FROM conversations c
+             INNER JOIN conversation_participants cp
+                ON cp.conversation_id = c.id
+             WHERE cp.user_id = ?
+             ORDER BY COALESCE(last_message_at, c.updated_at) DESC, c.id DESC'
+        );
+        $conversationsStmt->execute([$authUserId]);
+        $rows = $conversationsStmt->fetchAll();
+
+        $unreadStmt = db()->prepare(
+            'SELECT
+                m.conversation_id,
+                COUNT(*) AS unread_count
+             FROM messages m
+             INNER JOIN conversation_participants cp
+                ON cp.conversation_id = m.conversation_id
+             WHERE
+                cp.user_id = ?
+                AND m.sender_user_id <> ?
+                AND (cp.last_read_at IS NULL OR m.created_at > cp.last_read_at)
+             GROUP BY m.conversation_id'
+        );
+        $unreadStmt->execute([$authUserId, $authUserId]);
+        $unreadRows = $unreadStmt->fetchAll();
+        $unreadByConversation = [];
+        foreach ($unreadRows as $unreadRow) {
+            $unreadByConversation[(int) ($unreadRow['conversation_id'] ?? 0)] = (int) ($unreadRow['unread_count'] ?? 0);
+        }
+
+        $payload = [];
+        foreach ($rows as $row) {
+            $conversationId = (int) ($row['id'] ?? 0);
+            if ($conversationId <= 0) {
+                continue;
+            }
+
+            $payload[] = [
+                'id' => $conversationId,
+                'name' => (string) ($row['name'] ?? 'Conversation'),
+                'participant_count' => (int) ($row['participant_count'] ?? 0),
+                'last_message' => $row['last_message'] !== null ? (string) $row['last_message'] : null,
+                'last_message_at' => $row['last_message_at'] !== null ? (string) $row['last_message_at'] : null,
+                'updated_at' => (string) ($row['updated_at'] ?? ''),
+                'unread_count' => $unreadByConversation[$conversationId] ?? 0,
+            ];
+        }
+
+        json_response($payload);
+    }
+
+    if (preg_match('#^messages/conversations/(\d+)/messages$#', $route, $matches) === 1 && $method === 'GET') {
+        ensure_default_messages_conversation();
+
+        $conversationId = (int) $matches[1];
+        if (!user_can_access_conversation($conversationId, $authUserId)) {
+            json_response(['error' => 'Conversation not found'], 404);
+        }
+
+        $messagesStmt = db()->prepare(
+            'SELECT
+                m.id,
+                m.conversation_id,
+                m.sender_user_id,
+                m.content,
+                m.created_at,
+                COALESCE(u.name, "User") AS sender_name
+             FROM messages m
+             LEFT JOIN users u ON u.id = m.sender_user_id
+             WHERE m.conversation_id = ?
+             ORDER BY m.created_at ASC, m.id ASC
+             LIMIT 500'
+        );
+        $messagesStmt->execute([$conversationId]);
+        $rows = $messagesStmt->fetchAll();
+
+        $markRead = db()->prepare(
+            'UPDATE conversation_participants
+             SET last_read_at = NOW()
+             WHERE conversation_id = ? AND user_id = ?'
+        );
+        $markRead->execute([$conversationId, $authUserId]);
+
+        $payload = [];
+        foreach ($rows as $row) {
+            $payload[] = [
+                'id' => (int) ($row['id'] ?? 0),
+                'conversation_id' => (int) ($row['conversation_id'] ?? 0),
+                'sender_user_id' => (int) ($row['sender_user_id'] ?? 0),
+                'sender_name' => (string) ($row['sender_name'] ?? 'User'),
+                'content' => (string) ($row['content'] ?? ''),
+                'created_at' => (string) ($row['created_at'] ?? ''),
+            ];
+        }
+
+        json_response($payload);
+    }
+
+    if (preg_match('#^messages/conversations/(\d+)/messages$#', $route, $matches) === 1 && $method === 'POST') {
+        ensure_default_messages_conversation();
+
+        $conversationId = (int) $matches[1];
+        if (!user_can_access_conversation($conversationId, $authUserId)) {
+            json_response(['error' => 'Conversation not found'], 404);
+        }
+
+        $input = read_json_body();
+        $content = trim((string) ($input['content'] ?? ''));
+        if ($content === '') {
+            json_response(['error' => 'Message content is required'], 400);
+        }
+
+        $contentLength = function_exists('mb_strlen') ? mb_strlen($content, 'UTF-8') : strlen($content);
+        if ($contentLength > 4000) {
+            json_response(['error' => 'Message is too long'], 400);
+        }
+
+        $insert = db()->prepare(
+            'INSERT INTO messages (conversation_id, sender_user_id, content, created_at)
+             VALUES (?, ?, ?, NOW())'
+        );
+        $insert->execute([$conversationId, $authUserId, $content]);
+        $messageId = (int) db()->lastInsertId();
+
+        $touchConversation = db()->prepare('UPDATE conversations SET updated_at = NOW() WHERE id = ?');
+        $touchConversation->execute([$conversationId]);
+
+        $markRead = db()->prepare(
+            'UPDATE conversation_participants
+             SET last_read_at = NOW()
+             WHERE conversation_id = ? AND user_id = ?'
+        );
+        $markRead->execute([$conversationId, $authUserId]);
+
+        $select = db()->prepare(
+            'SELECT
+                m.id,
+                m.conversation_id,
+                m.sender_user_id,
+                m.content,
+                m.created_at,
+                COALESCE(u.name, "User") AS sender_name
+             FROM messages m
+             LEFT JOIN users u ON u.id = m.sender_user_id
+             WHERE m.id = ?
+             LIMIT 1'
+        );
+        $select->execute([$messageId]);
+        $row = $select->fetch();
+        if (!$row) {
+            json_response(['error' => 'Failed to create message'], 500);
+        }
+
+        json_response([
+            'id' => (int) ($row['id'] ?? 0),
+            'conversation_id' => (int) ($row['conversation_id'] ?? 0),
+            'sender_user_id' => (int) ($row['sender_user_id'] ?? 0),
+            'sender_name' => (string) ($row['sender_name'] ?? 'User'),
+            'content' => (string) ($row['content'] ?? ''),
+            'created_at' => (string) ($row['created_at'] ?? ''),
+        ]);
+    }
+
     if ($route === 'contacts' && $method === 'GET') {
         $rows = db()->query('SELECT * FROM contacts ORDER BY id DESC')->fetchAll();
         json_response($rows);
