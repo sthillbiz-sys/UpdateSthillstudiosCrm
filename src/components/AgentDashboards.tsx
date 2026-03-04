@@ -27,7 +27,7 @@ interface AgentDashboardDetails {
 }
 
 export function AgentDashboards() {
-  const { isAdmin, allEmployees, loading: employeesLoading } = useEmployee();
+  const { isAdmin, allEmployees, loading: employeesLoading, refreshAllEmployees } = useEmployee();
   const [onlinePresence, setOnlinePresence] = useState<Record<string, boolean>>({});
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [agentStats, setAgentStats] = useState<Record<string, AgentStats>>({});
@@ -56,6 +56,19 @@ export function AgentDashboards() {
     // Fallback for legacy data where non-admin team members may still be "employee".
     return mapped.filter((emp) => emp.role !== 'admin');
   }, [allEmployees, onlinePresence]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      return;
+    }
+    void refreshAllEmployees();
+    const refreshId = window.setInterval(() => {
+      void refreshAllEmployees();
+    }, 30000);
+    return () => {
+      window.clearInterval(refreshId);
+    };
+  }, [isAdmin, refreshAllEmployees]);
 
   useEffect(() => {
     void loadPresence();

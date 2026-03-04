@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { supabase } from './supabase';
 import { useAuth } from './auth';
 
@@ -64,7 +64,7 @@ export function EmployeeProvider({ children }: { children: ReactNode }) {
   const [allEmployees, setAllEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const refreshEmployee = async () => {
+  const refreshEmployee = useCallback(async () => {
     if (!user?.email) {
       setCurrentEmployee(null);
       setLoading(false);
@@ -98,9 +98,9 @@ export function EmployeeProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user]);
 
-  const refreshAllEmployees = async () => {
+  const refreshAllEmployees = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from('employees')
@@ -112,12 +112,12 @@ export function EmployeeProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Error loading all employees:', error);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    refreshEmployee();
-    refreshAllEmployees();
-  }, [user]);
+    void refreshEmployee();
+    void refreshAllEmployees();
+  }, [refreshEmployee, refreshAllEmployees]);
 
   const isAdmin = normalizeRole(currentEmployee?.role || user?.role || 'employee') === 'admin';
 

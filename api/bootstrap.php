@@ -252,6 +252,83 @@ function safe_user_from_row(array $row): array {
     ];
 }
 
+function normalize_employee_role_from_user_role(?string $value): string {
+    $role = strtolower(trim((string) $value));
+    if ($role === '') {
+        return 'employee';
+    }
+    if (str_contains($role, 'admin')) {
+        return 'admin';
+    }
+    if (str_contains($role, 'agent')) {
+        return 'agent';
+    }
+    if (str_contains($role, 'manager')) {
+        return 'agent';
+    }
+    return 'employee';
+}
+
+function ensure_employee_record_for_user(array $userRow): void {
+    $email = strtolower(trim((string) ($userRow['email'] ?? '')));
+    if ($email === '') {
+        return;
+    }
+
+    $name = trim((string) ($userRow['name'] ?? ''));
+    if ($name === '') {
+        $name = explode('@', $email)[0] ?? 'User';
+    }
+    $role = normalize_employee_role_from_user_role((string) ($userRow['role'] ?? ''));
+
+    $pdo = db();
+    $select = $pdo->prepare('SELECT id, name, role FROM employees WHERE LOWER(email) = LOWER(?) ORDER BY id ASC LIMIT 1');
+    $select->execute([$email]);
+    $existing = $select->fetch();
+
+    if (!$existing) {
+        $insert = $pdo->prepare(
+            'INSERT INTO employees (name, email, role, contact_info)
+             VALUES (?, ?, ?, ?)'
+        );
+        $insert->execute([$name, $email, $role, '']);
+        return;
+    }
+
+    $fields = [];
+    $params = [];
+    $existingName = trim((string) ($existing['name'] ?? ''));
+    $existingRole = trim((string) ($existing['role'] ?? ''));
+    if ($existingName === '') {
+        $fields[] = 'name = ?';
+        $params[] = $name;
+    }
+    if (strtolower($existingRole) !== strtolower($role)) {
+        $fields[] = 'role = ?';
+        $params[] = $role;
+    }
+
+    if (count($fields) === 0) {
+        return;
+    }
+
+    $params[] = (int) $existing['id'];
+    $sql = 'UPDATE employees SET ' . implode(', ', $fields) . ' WHERE id = ?';
+    $update = $pdo->prepare($sql);
+    $update->execute($params);
+}
+
+function ensure_employee_records_for_all_users(): void {
+    $pdo = db();
+    $rows = $pdo->query('SELECT id, name, email, role FROM users WHERE email IS NOT NULL AND email <> ""')->fetchAll();
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        ensure_employee_record_for_user($row);
+    }
+}
+
 function password_is_hash(string $value): bool {
     return str_starts_with($value, '$2y$') || str_starts_with($value, '$2a$') || str_starts_with($value, '$2b$');
 }

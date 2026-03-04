@@ -56,6 +56,8 @@ try {
             $update->execute([$hashedPassword, (int) $user['id']]);
         }
 
+        ensure_employee_record_for_user($user);
+
         $safeUser = safe_user_from_row($user);
         $token = sign_token($safeUser);
         json_response(['token' => $token, 'user' => $safeUser]);
@@ -92,6 +94,8 @@ try {
         if (!$user) {
             json_response(['error' => 'Failed to create user'], 500);
         }
+
+        ensure_employee_record_for_user($user);
 
         $safeUser = safe_user_from_row($user);
         $token = sign_token($safeUser);
@@ -1081,6 +1085,7 @@ try {
     }
 
     if ($route === 'employees' && $method === 'GET') {
+        ensure_employee_records_for_all_users();
         $rows = db()->query('SELECT * FROM employees ORDER BY id DESC')->fetchAll();
         json_response($rows);
     }
