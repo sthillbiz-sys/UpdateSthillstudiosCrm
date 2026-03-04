@@ -37,6 +37,11 @@ jobs:
           MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
           MYSQL_SSL: ${{ secrets.MYSQL_SSL }}
           MYSQL_SSL_CA_BASE64: ${{ secrets.MYSQL_SSL_CA_BASE64 }}
+          MIGRATE_VIA_SSH_TUNNEL: ${{ secrets.MIGRATE_VIA_SSH_TUNNEL }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PRIVATE_KEY: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
         run: |
           set -eu
           if [ -z "${MYSQL_HOST:-}" ]; then
@@ -47,6 +52,59 @@ jobs:
             echo "Missing required MySQL credentials (MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE)."
             exit 1
           fi
+
+          TUNNEL_PID=""
+          cleanup() {
+            if [ -n "${TUNNEL_PID}" ] && kill -0 "${TUNNEL_PID}" >/dev/null 2>&1; then
+              kill "${TUNNEL_PID}" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          # On many Hostinger setups, MySQL is localhost-only and rejects direct runner connections.
+          # If MYSQL_HOST points to localhost, or MIGRATE_VIA_SSH_TUNNEL=true, create an SSH tunnel.
+          FORCE_TUNNEL="$(echo "${MIGRATE_VIA_SSH_TUNNEL:-false}" | tr '[:upper:]' '[:lower:]')"
+          USE_TUNNEL="false"
+          if [ "${MYSQL_HOST}" = "localhost" ] || [ "${MYSQL_HOST}" = "127.0.0.1" ] || [ "${FORCE_TUNNEL}" = "true" ]; then
+            USE_TUNNEL="true"
+          fi
+
+          if [ "${USE_TUNNEL}" = "true" ]; then
+            if [ -z "${HOSTINGER_SSH_HOST:-}" ] || [ -z "${HOSTINGER_SSH_PORT:-}" ] || [ -z "${HOSTINGER_SSH_USER:-}" ] || [ -z "${HOSTINGER_SSH_PRIVATE_KEY:-}" ]; then
+              echo "SSH tunnel requested, but SSH tunnel secrets are missing."
+              echo "Set HOSTINGER_SSH_HOST, HOSTINGER_SSH_PORT, HOSTINGER_SSH_USER, HOSTINGER_SSH_PRIVATE_KEY."
+              exit 1
+            fi
+
+            mkdir -p ~/.ssh
+            chmod 700 ~/.ssh
+            printf "%s\n" "$HOSTINGER_SSH_PRIVATE_KEY" > ~/.ssh/id_hostinger
+            chmod 600 ~/.ssh/id_hostinger
+            ssh-keyscan -p "$HOSTINGER_SSH_PORT" -H "$HOSTINGER_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+            chmod 644 ~/.ssh/known_hosts
+
+            MYSQL_PORT="${MYSQL_PORT:-3306}"
+            MYSQL_TUNNEL_TARGET_HOST="${MYSQL_HOST}"
+            if [ "${MYSQL_TUNNEL_TARGET_HOST}" = "localhost" ] || [ "${MYSQL_TUNNEL_TARGET_HOST}" = "127.0.0.1" ]; then
+              MYSQL_TUNNEL_TARGET_HOST="127.0.0.1"
+            fi
+            TUNNEL_LOCAL_PORT=13306
+            ssh \
+              -i ~/.ssh/id_hostinger \
+              -p "$HOSTINGER_SSH_PORT" \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=accept-new \
+              -o ExitOnForwardFailure=yes \
+              -N \
+              -L "127.0.0.1:${TUNNEL_LOCAL_PORT}:${MYSQL_TUNNEL_TARGET_HOST}:${MYSQL_PORT}" \
+              "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" &
+            TUNNEL_PID="$!"
+            sleep 3
+
+            export MYSQL_HOST="127.0.0.1"
+            export MYSQL_PORT="${TUNNEL_LOCAL_PORT}"
+          fi
+
           npm run migrate:latest
 
       - name: Build app assets
