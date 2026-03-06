@@ -43,6 +43,25 @@ export function TimeTracking() {
   const [elapsedTime, setElapsedTime] = useState(0);
   const [view, setView] = useState<'today' | 'week' | 'month' | 'year'>('today');
 
+  const parseAppDate = (value?: string) => {
+    if (!value) {
+      return null;
+    }
+    const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+    const date = new Date(normalized);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const formatDateCell = (value?: string) => {
+    const date = parseAppDate(value);
+    return date ? date.toLocaleDateString() : '-';
+  };
+
+  const formatTimeCell = (value?: string) => {
+    const date = parseAppDate(value);
+    return date ? date.toLocaleTimeString() : '-';
+  };
+
   useEffect(() => {
     loadShifts();
     loadBreaks();
@@ -54,7 +73,12 @@ export function TimeTracking() {
     let interval: NodeJS.Timeout;
     if (activeShift && activeShift.status !== 'clocked_out') {
       interval = setInterval(() => {
-        const start = new Date(activeShift.clock_in).getTime();
+        const shiftStart = parseAppDate(activeShift.clock_in);
+        if (!shiftStart) {
+          setElapsedTime(0);
+          return;
+        }
+        const start = shiftStart.getTime();
         const now = Date.now();
         let elapsed = Math.floor((now - start) / 1000);
 
@@ -63,7 +87,12 @@ export function TimeTracking() {
         }
 
         if (activeShift.status === 'on_lunch' && activeShift.lunch_start) {
-          const lunchStart = new Date(activeShift.lunch_start).getTime();
+          const lunchStartDate = parseAppDate(activeShift.lunch_start);
+          if (!lunchStartDate) {
+            setElapsedTime(Math.max(0, elapsed));
+            return;
+          }
+          const lunchStart = lunchStartDate.getTime();
           const currentLunchDuration = Math.floor((now - lunchStart) / 1000);
           elapsed -= currentLunchDuration;
         }
@@ -200,7 +229,10 @@ export function TimeTracking() {
 
     try {
       const lunchEnd = new Date();
-      const lunchStart = new Date(activeShift.lunch_start);
+      const lunchStart = parseAppDate(activeShift.lunch_start);
+      if (!lunchStart) {
+        throw new Error('Unable to read lunch start time.');
+      }
       const lunchDuration = Math.floor((lunchEnd.getTime() - lunchStart.getTime()) / 60000);
 
       const { data, error } = await supabase
@@ -227,7 +259,10 @@ export function TimeTracking() {
 
     try {
       const clockOut = new Date();
-      const clockIn = new Date(activeShift.clock_in);
+      const clockIn = parseAppDate(activeShift.clock_in);
+      if (!clockIn) {
+        throw new Error('Unable to read shift start time.');
+      }
       const totalMinutes = Math.floor((clockOut.getTime() - clockIn.getTime()) / 60000);
       const lunchMinutes = activeShift.lunch_duration_minutes || 0;
       const workedMinutes = totalMinutes - lunchMinutes;
@@ -283,7 +318,10 @@ export function TimeTracking() {
 
     try {
       const breakEnd = new Date();
-      const breakStart = new Date(activeBreak.break_start);
+      const breakStart = parseAppDate(activeBreak.break_start);
+      if (!breakStart) {
+        throw new Error('Unable to read break start time.');
+      }
       const duration = Math.floor((breakEnd.getTime() - breakStart.getTime()) / 60000);
 
       const { error } = await supabase
@@ -319,7 +357,10 @@ export function TimeTracking() {
     const today = now.toISOString().split('T')[0];
 
     return shifts.filter((shift) => {
-      const shiftDate = new Date(shift.shift_date);
+      const shiftDate = parseAppDate(shift.shift_date);
+      if (!shiftDate) {
+        return false;
+      }
 
       switch (view) {
         case 'today':
@@ -406,7 +447,7 @@ export function TimeTracking() {
               <p className="text-sm text-blue-100 mb-2">Time Worked Today</p>
               <p className="text-5xl font-bold tracking-tight">{formatDuration(elapsedTime)}</p>
               <p className="text-xs text-blue-200 mt-2">
-                Started at {new Date(activeShift.clock_in).toLocaleTimeString()}
+                Started at {formatTimeCell(activeShift.clock_in)}
               </p>
             </div>
 
@@ -468,7 +509,7 @@ export function TimeTracking() {
               <div className="bg-orange-400/20 border border-orange-400/30 rounded-lg p-3 text-center">
                 <p className="text-sm font-medium text-orange-100">
                   On {activeBreak.break_type} break since{' '}
-                  {new Date(activeBreak.break_start).toLocaleTimeString()}
+                  {formatTimeCell(activeBreak.break_start)}
                 </p>
               </div>
             )}
@@ -629,18 +670,16 @@ export function TimeTracking() {
                 breaks.slice(0, 10).map((breakEntry) => (
                   <tr key={breakEntry.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                      {new Date(breakEntry.break_start).toLocaleDateString()}
+                      {formatDateCell(breakEntry.break_start)}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600 capitalize">
                       {breakEntry.break_type}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
-                      {new Date(breakEntry.break_start).toLocaleTimeString()}
+                      {formatTimeCell(breakEntry.break_start)}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
-                      {breakEntry.break_end
-                        ? new Date(breakEntry.break_end).toLocaleTimeString()
-                        : '-'}
+                      {breakEntry.break_end ? formatTimeCell(breakEntry.break_end) : '-'}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
                       {breakEntry.duration_minutes > 0
@@ -706,13 +745,13 @@ export function TimeTracking() {
                 getFilteredShifts().map((shift) => (
                   <tr key={shift.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                      {new Date(shift.shift_date).toLocaleDateString()}
+                      {formatDateCell(shift.shift_date)}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
-                      {new Date(shift.clock_in).toLocaleTimeString()}
+                      {formatTimeCell(shift.clock_in)}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
-                      {shift.clock_out ? new Date(shift.clock_out).toLocaleTimeString() : '-'}
+                      {shift.clock_out ? formatTimeCell(shift.clock_out) : '-'}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
                       {shift.lunch_duration_minutes > 0
