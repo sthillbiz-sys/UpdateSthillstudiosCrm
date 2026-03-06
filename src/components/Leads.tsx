@@ -15,13 +15,16 @@ interface Lead {
 export function Leads() {
   const { user } = useAuth();
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const selectAllRef = useRef<HTMLInputElement>(null);
   const [newLead, setNewLead] = useState({
     name: '',
     email: '',
@@ -43,13 +46,28 @@ export function Leads() {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      if (data) setLeads(data);
+      if (data) {
+        setLeads(data);
+        setSelectedLeadIds((current) =>
+          current.filter((leadId) => data.some((lead) => lead.id === leadId)),
+        );
+      }
     } catch (error) {
       console.error('Error loading leads:', error);
     } finally {
       setLoading(false);
     }
   };
+
+  const selectedCount = selectedLeadIds.length;
+  const allSelected = leads.length > 0 && selectedCount === leads.length;
+  const someSelected = selectedCount > 0 && selectedCount < leads.length;
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = someSelected;
+    }
+  }, [someSelected]);
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -129,10 +147,56 @@ export function Leads() {
 
       if (error) throw error;
 
+      setSelectedLeadIds((current) => current.filter((id) => id !== leadId));
       loadLeads();
     } catch (error) {
       console.error('Error deleting lead:', error);
       alert('Failed to delete lead. Please try again.');
+    }
+  };
+
+  const toggleLeadSelection = (leadId: string) => {
+    setSelectedLeadIds((current) =>
+      current.includes(leadId)
+        ? current.filter((id) => id !== leadId)
+        : [...current, leadId],
+    );
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedLeadIds((current) => (current.length === leads.length ? [] : leads.map((lead) => lead.id)));
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedLeadIds.length === 0) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${selectedLeadIds.length} selected lead${selectedLeadIds.length === 1 ? '' : 's'}? This action cannot be undone.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setBulkDeleting(true);
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .delete()
+        .in('id', selectedLeadIds);
+
+      if (error) {
+        throw error;
+      }
+
+      setSelectedLeadIds([]);
+      await loadLeads();
+    } catch (error) {
+      console.error('Error deleting selected leads:', error);
+      alert('Failed to delete selected leads. Please try again.');
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
@@ -260,6 +324,16 @@ export function Leads() {
           <p className="text-sm text-gray-600">Upload and manage potential clients</p>
         </div>
         <div className="flex items-center gap-2">
+          {selectedCount > 0 && (
+            <button
+              onClick={() => void handleDeleteSelected()}
+              disabled={bulkDeleting}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-300 text-white rounded-lg transition-colors text-sm font-medium"
+            >
+              <Trash2 className="w-4 h-4" />
+              {bulkDeleting ? 'Deleting...' : `Delete Selected (${selectedCount})`}
+            </button>
+          )}
           <button
             onClick={() => setShowUploadModal(true)}
             className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm font-medium"
@@ -514,10 +588,37 @@ export function Leads() {
       )}
 
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="flex items-center justify-between gap-4 border-b border-gray-200 bg-gray-50 px-6 py-3">
+          <label className="flex items-center gap-3 text-sm text-gray-700">
+            <input
+              ref={selectAllRef}
+              type="checkbox"
+              checked={allSelected}
+              onChange={toggleSelectAll}
+              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span>
+              {selectedCount > 0
+                ? `${selectedCount} selected`
+                : `Select all ${leads.length} lead${leads.length === 1 ? '' : 's'}`}
+            </span>
+          </label>
+          {selectedCount > 0 && (
+            <button
+              onClick={() => setSelectedLeadIds([])}
+              className="text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
+            >
+              Clear selection
+            </button>
+          )}
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
+                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  <span className="sr-only">Select</span>
+                </th>
                 <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                   Name
                 </th>
@@ -541,7 +642,7 @@ export function Leads() {
             <tbody className="divide-y divide-gray-200 bg-white">
               {leads.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-gray-500 text-sm">
+                  <td colSpan={7} className="px-6 py-12 text-center text-gray-500 text-sm">
                     No leads yet. Upload a CSV or add leads manually to get started.
                   </td>
                 </tr>
@@ -552,6 +653,15 @@ export function Leads() {
                     className="hover:bg-gray-50 transition-colors cursor-pointer"
                     onClick={() => handleEditLead(lead)}
                   >
+                    <td className="px-6 py-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedLeadIds.includes(lead.id)}
+                        onChange={() => toggleLeadSelection(lead.id)}
+                        className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        aria-label={`Select ${lead.name}`}
+                      />
+                    </td>
                     <td className="px-6 py-4 text-sm text-gray-900 whitespace-nowrap">
                       {lead.name}
                     </td>
