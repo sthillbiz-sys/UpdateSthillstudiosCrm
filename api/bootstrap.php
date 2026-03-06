@@ -702,6 +702,82 @@ function ensure_default_messages_conversation(): int {
     return $cachedConversationId;
 }
 
+function find_direct_conversation_between_users(PDO $pdo, int $firstUserId, int $secondUserId): int {
+    if ($firstUserId <= 0 || $secondUserId <= 0 || $firstUserId === $secondUserId) {
+        return 0;
+    }
+
+    $stmt = $pdo->prepare(
+        'SELECT c.id
+         FROM conversations c
+         INNER JOIN conversation_participants cp_first
+            ON cp_first.conversation_id = c.id
+           AND cp_first.user_id = ?
+         INNER JOIN conversation_participants cp_second
+            ON cp_second.conversation_id = c.id
+           AND cp_second.user_id = ?
+         WHERE
+            c.is_group = 0
+            AND (
+                SELECT COUNT(*)
+                FROM conversation_participants cp_count
+                WHERE cp_count.conversation_id = c.id
+            ) = 2
+         ORDER BY c.id ASC
+         LIMIT 1'
+    );
+    $stmt->execute([$firstUserId, $secondUserId]);
+
+    return (int) $stmt->fetchColumn();
+}
+
+function ensure_direct_message_conversations_for_user(int $userId): void {
+    if ($userId <= 0) {
+        return;
+    }
+
+    $pdo = db();
+    $usersStmt = $pdo->prepare(
+        'SELECT id, name
+         FROM users
+         WHERE id <> ?
+         ORDER BY name ASC, id ASC'
+    );
+    $usersStmt->execute([$userId]);
+    $otherUsers = $usersStmt->fetchAll();
+
+    $createConversation = $pdo->prepare(
+        'INSERT INTO conversations (name, is_group, created_by_user_id, created_at, updated_at)
+         VALUES (?, 0, ?, NOW(), NOW())'
+    );
+    $linkParticipant = $pdo->prepare(
+        'INSERT IGNORE INTO conversation_participants (conversation_id, user_id, joined_at, last_read_at)
+         VALUES (?, ?, NOW(), NOW())'
+    );
+
+    foreach ($otherUsers as $otherUser) {
+        $otherUserId = (int) ($otherUser['id'] ?? 0);
+        if ($otherUserId <= 0) {
+            continue;
+        }
+
+        $conversationId = find_direct_conversation_between_users($pdo, $userId, $otherUserId);
+        if ($conversationId <= 0) {
+            $otherUserName = trim((string) ($otherUser['name'] ?? ''));
+            $conversationName = $otherUserName !== '' ? $otherUserName : 'Direct Message';
+            $createConversation->execute([$conversationName, $userId]);
+            $conversationId = (int) $pdo->lastInsertId();
+        }
+
+        if ($conversationId <= 0) {
+            continue;
+        }
+
+        $linkParticipant->execute([$conversationId, $userId]);
+        $linkParticipant->execute([$conversationId, $otherUserId]);
+    }
+}
+
 function user_can_access_conversation(int $conversationId, int $userId): bool {
     if ($conversationId <= 0 || $userId <= 0) {
         return false;

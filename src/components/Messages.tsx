@@ -7,11 +7,17 @@ import { apiGet, apiPost } from '../lib/api';
 interface ApiConversation {
   id: number;
   name: string;
+  is_group: boolean;
   participant_count: number;
   last_message: string | null;
   last_message_at: string | null;
   updated_at: string;
   unread_count: number;
+  other_user?: {
+    id: number;
+    name: string;
+    status: string;
+  } | null;
 }
 
 interface ApiMessage {
@@ -34,10 +40,16 @@ interface Message {
 interface Conversation {
   id: number;
   name: string;
+  isGroup: boolean;
   participantCount: number;
   lastMessage: string;
   timestamp: string;
   unread: number;
+  otherUser: {
+    id: number;
+    name: string;
+    status: string;
+  } | null;
 }
 
 export function Messages() {
@@ -79,10 +91,16 @@ export function Messages() {
   const mapConversation = (conversation: ApiConversation): Conversation => ({
     id: conversation.id,
     name: conversation.name,
+    isGroup: Boolean(conversation.is_group),
     participantCount: conversation.participant_count || 0,
-    lastMessage: conversation.last_message || 'No messages yet',
+    lastMessage:
+      conversation.last_message ||
+      (conversation.is_group
+        ? 'No messages yet'
+        : `Start a conversation with ${conversation.other_user?.name || conversation.name}`),
     timestamp: toDisplayDate(conversation.last_message_at || conversation.updated_at, ''),
     unread: conversation.unread_count || 0,
+    otherUser: conversation.other_user || null,
   });
 
   const mapMessage = (message: ApiMessage): Message => ({
@@ -289,7 +307,7 @@ export function Messages() {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               type="text"
-              placeholder="Search conversations..."
+              placeholder="Search people or conversations..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -315,8 +333,15 @@ export function Messages() {
               }`}
             >
               <div className="flex items-start gap-3">
-                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-cyan-400 flex items-center justify-center text-white font-bold flex-shrink-0">
-                  {getConversationInitials(conv.name)}
+                <div className="relative flex-shrink-0">
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-cyan-400 flex items-center justify-center text-white font-bold">
+                    {getConversationInitials(conv.name)}
+                  </div>
+                  {!conv.isGroup && conv.otherUser && (
+                    <div
+                      className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${getStatusColor(conv.otherUser.status)}`}
+                    />
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between mb-1">
@@ -325,6 +350,11 @@ export function Messages() {
                     </h3>
                     <span className="text-xs text-gray-500">{conv.timestamp}</span>
                   </div>
+                  {!conv.isGroup && conv.otherUser && (
+                    <p className="text-[11px] text-gray-500 mb-1">
+                      {getStatusLabel(conv.otherUser.status)}
+                    </p>
+                  )}
                   <p className="text-xs text-gray-600 truncate">{conv.lastMessage}</p>
                 </div>
                 {conv.unread > 0 && (
@@ -349,17 +379,26 @@ export function Messages() {
           <>
             <div className="p-4 bg-white border-b border-gray-200">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-cyan-400 flex items-center justify-center text-white font-bold">
-                  {getConversationInitials(selectedConversationMeta?.name || 'Conversation')}
+                <div className="relative">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-cyan-400 flex items-center justify-center text-white font-bold">
+                    {getConversationInitials(selectedConversationMeta?.name || 'Conversation')}
+                  </div>
+                  {!selectedConversationMeta?.isGroup && selectedConversationMeta?.otherUser && (
+                    <div
+                      className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${getStatusColor(selectedConversationMeta.otherUser.status)}`}
+                    />
+                  )}
                 </div>
                 <div>
                   <h3 className="font-semibold text-gray-900">
                     {selectedConversationMeta?.name || 'Conversation'}
                   </h3>
                   <p className="text-xs text-gray-500">
-                    {(selectedConversationMeta?.participantCount || 0) > 0
+                    {selectedConversationMeta?.isGroup
                       ? `${selectedConversationMeta?.participantCount || 0} members`
-                      : 'No members'}
+                      : selectedConversationMeta?.otherUser
+                        ? getStatusLabel(selectedConversationMeta.otherUser.status)
+                        : 'Direct message'}
                   </p>
                 </div>
               </div>

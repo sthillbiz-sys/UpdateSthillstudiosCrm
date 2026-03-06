@@ -703,11 +703,13 @@ try {
 
     if ($route === 'messages/conversations' && $method === 'GET') {
         ensure_default_messages_conversation();
+        ensure_direct_message_conversations_for_user($authUserId);
 
         $conversationsStmt = db()->prepare(
             'SELECT
                 c.id,
                 c.name,
+                c.is_group,
                 c.updated_at,
                 cp.last_read_at,
                 (
@@ -728,14 +730,56 @@ try {
                     WHERE m.conversation_id = c.id
                     ORDER BY m.created_at DESC, m.id DESC
                     LIMIT 1
-                ) AS last_message_at
+                ) AS last_message_at,
+                (
+                    SELECT cp2.user_id
+                    FROM conversation_participants cp2
+                    WHERE
+                        cp2.conversation_id = c.id
+                        AND cp2.user_id <> ?
+                    ORDER BY cp2.user_id ASC
+                    LIMIT 1
+                ) AS other_user_id,
+                (
+                    SELECT COALESCE(u.name, "User")
+                    FROM conversation_participants cp2
+                    LEFT JOIN users u ON u.id = cp2.user_id
+                    WHERE
+                        cp2.conversation_id = c.id
+                        AND cp2.user_id <> ?
+                    ORDER BY cp2.user_id ASC
+                    LIMIT 1
+                ) AS other_user_name,
+                (
+                    SELECT up.status
+                    FROM conversation_participants cp2
+                    LEFT JOIN user_presence up ON up.user_id = cp2.user_id
+                    WHERE
+                        cp2.conversation_id = c.id
+                        AND cp2.user_id <> ?
+                    ORDER BY cp2.user_id ASC
+                    LIMIT 1
+                ) AS other_user_presence_status,
+                (
+                    SELECT up.last_seen
+                    FROM conversation_participants cp2
+                    LEFT JOIN user_presence up ON up.user_id = cp2.user_id
+                    WHERE
+                        cp2.conversation_id = c.id
+                        AND cp2.user_id <> ?
+                    ORDER BY cp2.user_id ASC
+                    LIMIT 1
+                ) AS other_user_last_seen
              FROM conversations c
              INNER JOIN conversation_participants cp
                 ON cp.conversation_id = c.id
              WHERE cp.user_id = ?
-             ORDER BY COALESCE(last_message_at, c.updated_at) DESC, c.id DESC'
+             ORDER BY
+                c.is_group DESC,
+                COALESCE(last_message_at, c.updated_at) DESC,
+                c.id DESC'
         );
-        $conversationsStmt->execute([$authUserId]);
+        $conversationsStmt->execute([$authUserId, $authUserId, $authUserId, $authUserId, $authUserId]);
         $rows = $conversationsStmt->fetchAll();
 
         $unreadStmt = db()->prepare(
@@ -765,14 +809,36 @@ try {
                 continue;
             }
 
+            $isGroup = ((int) ($row['is_group'] ?? 1)) === 1;
+            $otherUserId = (int) ($row['other_user_id'] ?? 0);
+            $otherUserName = trim((string) ($row['other_user_name'] ?? ''));
+            $otherUserStatus = normalize_presence_status((string) ($row['other_user_presence_status'] ?? 'offline'));
+            $otherUserLastSeen = $row['other_user_last_seen'] !== null ? (string) $row['other_user_last_seen'] : null;
+            if (!$isGroup && !is_presence_online($otherUserStatus, $otherUserLastSeen)) {
+                $otherUserStatus = 'offline';
+            }
+
+            $conversationName = (string) ($row['name'] ?? 'Conversation');
+            if (!$isGroup && $otherUserName !== '') {
+                $conversationName = $otherUserName;
+            }
+
             $payload[] = [
                 'id' => $conversationId,
-                'name' => (string) ($row['name'] ?? 'Conversation'),
+                'name' => $conversationName,
+                'is_group' => $isGroup,
                 'participant_count' => (int) ($row['participant_count'] ?? 0),
                 'last_message' => $row['last_message'] !== null ? (string) $row['last_message'] : null,
                 'last_message_at' => $row['last_message_at'] !== null ? (string) $row['last_message_at'] : null,
                 'updated_at' => (string) ($row['updated_at'] ?? ''),
                 'unread_count' => $unreadByConversation[$conversationId] ?? 0,
+                'other_user' => !$isGroup && $otherUserId > 0
+                    ? [
+                        'id' => $otherUserId,
+                        'name' => $otherUserName !== '' ? $otherUserName : $conversationName,
+                        'status' => $otherUserStatus,
+                    ]
+                    : null,
             ];
         }
 
