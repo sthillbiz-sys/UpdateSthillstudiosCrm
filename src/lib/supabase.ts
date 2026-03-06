@@ -357,11 +357,41 @@ class QueryBuilder implements PromiseLike<SupabaseResult<any>> {
   private async executeDelete(): Promise<SupabaseResult<any>> {
     try {
       const id = this.getFilterValue('id');
-      if (id === undefined || id === null) {
+      if (id !== undefined && id !== null) {
+        const data = await apiDelete<any>(`${tableToRoute(this.table)}/${id}`);
+        return this.finalizeMutationResult(data);
+      }
+
+      const idListFilter = this.filters.find((filter) => filter.column === 'id' && filter.op === 'in');
+      if (!idListFilter || !Array.isArray(idListFilter.value) || idListFilter.value.length === 0) {
         return { data: null, error: new Error('Missing id filter for delete') };
       }
-      const data = await apiDelete<any>(`${tableToRoute(this.table)}/${id}`);
-      return this.finalizeMutationResult(data);
+
+      const ids = idListFilter.value.filter((value) => value !== undefined && value !== null && value !== '');
+      if (ids.length === 0) {
+        return { data: null, error: new Error('Missing id filter for delete') };
+      }
+
+      const results = await Promise.allSettled(
+        ids.map((value) => apiDelete<any>(`${tableToRoute(this.table)}/${value}`)),
+      );
+
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failures.length > 0) {
+        const firstFailure = failures[0]?.reason;
+        const baseMessage =
+          firstFailure instanceof Error ? firstFailure.message : 'Failed to delete one or more records';
+        return {
+          data: null,
+          error: new Error(
+            failures.length === ids.length
+              ? baseMessage
+              : `${baseMessage} (${failures.length} of ${ids.length} failed)`,
+          ),
+        };
+      }
+
+      return this.finalizeMutationResult({ success: true, deleted_count: ids.length });
     } catch (error) {
       return { data: null, error };
     }

@@ -1,21 +1,21 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
 import { Plus, Upload, X, FileText, Trash2, Edit } from 'lucide-react';
+import { apiDelete, apiGet, apiPost, apiPut } from '../lib/api';
 
 interface Lead {
-  id: string;
+  id: number;
   name: string;
   email: string;
   phone: string;
   source: string;
-  date: string;
+  timestamp: string;
 }
 
 export function Leads() {
   const { user } = useAuth();
   const [leads, setLeads] = useState<Lead[]>([]);
-  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
+  const [selectedLeadIds, setSelectedLeadIds] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -36,24 +36,35 @@ export function Leads() {
     loadLeads();
   }, [user]);
 
+  const normalizeLead = (row: Partial<Lead> & Record<string, unknown>): Lead => ({
+    id: Number(row.id || 0),
+    name: String(row.name || 'Unknown'),
+    email: String(row.email || ''),
+    phone: String(row.phone || ''),
+    source: String(row.source || 'manual'),
+    timestamp: String(row.timestamp || row.date || row.created_at || new Date().toISOString()),
+  });
+
   const loadLeads = async () => {
-    if (!user) return;
+    if (!user) {
+      setLeads([]);
+      setSelectedLeadIds([]);
+      setLoading(false);
+      return;
+    }
 
     try {
-      const { data, error } = await supabase
-        .from('leads')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      if (data) {
-        setLeads(data);
+      const rows = await apiGet<Record<string, unknown>[]>('/leads');
+      if (Array.isArray(rows)) {
+        const mapped = rows.map(normalizeLead);
+        setLeads(mapped);
         setSelectedLeadIds((current) =>
-          current.filter((leadId) => data.some((lead) => lead.id === leadId)),
+          current.filter((leadId) => mapped.some((lead) => lead.id === leadId)),
         );
       }
     } catch (error) {
       console.error('Error loading leads:', error);
+      setLeads([]);
     } finally {
       setLoading(false);
     }
@@ -70,7 +81,11 @@ export function Leads() {
   }, [someSelected]);
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
+    const normalized = dateString.includes('T') ? dateString : dateString.replace(' ', 'T');
+    const date = new Date(normalized);
+    if (Number.isNaN(date.getTime())) {
+      return dateString;
+    }
     return date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
   };
 
@@ -79,25 +94,19 @@ export function Leads() {
     if (!user) return;
 
     try {
-      const { error } = await supabase
-        .from('leads')
-        .insert({
-          name: newLead.name,
-          email: newLead.email,
-          phone: newLead.phone,
-          source: newLead.source,
-          date: new Date().toISOString(),
-          user_id: user.id
-        });
-
-      if (error) throw error;
+      await apiPost('/leads', {
+        name: newLead.name,
+        email: newLead.email,
+        phone: newLead.phone,
+        source: newLead.source,
+      });
 
       setNewLead({ name: '', email: '', phone: '', source: 'manual' });
       setShowAddModal(false);
-      loadLeads();
+      await loadLeads();
     } catch (error) {
       console.error('Error adding lead:', error);
-      alert('Failed to add lead. Please try again.');
+      alert(error instanceof Error ? error.message : 'Failed to add lead. Please try again.');
     }
   };
 
@@ -111,28 +120,23 @@ export function Leads() {
     if (!user || !editingLead) return;
 
     try {
-      const { error } = await supabase
-        .from('leads')
-        .update({
-          name: editingLead.name,
-          email: editingLead.email,
-          phone: editingLead.phone,
-          source: editingLead.source,
-        })
-        .eq('id', editingLead.id);
-
-      if (error) throw error;
+      await apiPut(`/leads/${editingLead.id}`, {
+        name: editingLead.name,
+        email: editingLead.email,
+        phone: editingLead.phone,
+        source: editingLead.source,
+      });
 
       setShowEditModal(false);
       setEditingLead(null);
-      loadLeads();
+      await loadLeads();
     } catch (error) {
       console.error('Error updating lead:', error);
-      alert('Failed to update lead. Please try again.');
+      alert(error instanceof Error ? error.message : 'Failed to update lead. Please try again.');
     }
   };
 
-  const handleDeleteLead = async (leadId: string, leadName: string) => {
+  const handleDeleteLead = async (leadId: number, leadName: string) => {
     const confirmed = window.confirm(
       `Are you sure you want to delete "${leadName}"? This action cannot be undone.`
     );
@@ -140,22 +144,17 @@ export function Leads() {
     if (!confirmed) return;
 
     try {
-      const { error } = await supabase
-        .from('leads')
-        .delete()
-        .eq('id', leadId);
-
-      if (error) throw error;
+      await apiDelete(`/leads/${leadId}`);
 
       setSelectedLeadIds((current) => current.filter((id) => id !== leadId));
-      loadLeads();
+      await loadLeads();
     } catch (error) {
       console.error('Error deleting lead:', error);
-      alert('Failed to delete lead. Please try again.');
+      alert(error instanceof Error ? error.message : 'Failed to delete lead. Please try again.');
     }
   };
 
-  const toggleLeadSelection = (leadId: string) => {
+  const toggleLeadSelection = (leadId: number) => {
     setSelectedLeadIds((current) =>
       current.includes(leadId)
         ? current.filter((id) => id !== leadId)
@@ -181,20 +180,22 @@ export function Leads() {
 
     setBulkDeleting(true);
     try {
-      const { error } = await supabase
-        .from('leads')
-        .delete()
-        .in('id', selectedLeadIds);
-
-      if (error) {
-        throw error;
+      const results = await Promise.allSettled(
+        selectedLeadIds.map((leadId) => apiDelete(`/leads/${leadId}`)),
+      );
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failures.length > 0) {
+        const firstFailure = failures[0]?.reason;
+        throw (firstFailure instanceof Error
+          ? firstFailure
+          : new Error('Failed to delete one or more selected leads.'));
       }
 
       setSelectedLeadIds([]);
       await loadLeads();
     } catch (error) {
       console.error('Error deleting selected leads:', error);
-      alert('Failed to delete selected leads. Please try again.');
+      alert(error instanceof Error ? error.message : 'Failed to delete selected leads. Please try again.');
     } finally {
       setBulkDeleting(false);
     }
@@ -214,31 +215,22 @@ export function Leads() {
       const firstName = nameParts[0] || lead.name;
       const lastName = nameParts.slice(1).join(' ') || '';
 
-      const { error: contactError } = await supabase
-        .from('contacts')
-        .insert({
-          user_id: user.id,
-          first_name: firstName,
-          last_name: lastName,
-          email: lead.email,
-          phone: lead.phone,
-          notes: `Converted from lead. Original source: ${lead.source}`
-        });
+      await apiPost('/contacts', {
+        name: lead.name,
+        first_name: firstName,
+        last_name: lastName,
+        email: lead.email,
+        phone: lead.phone,
+        notes: `Converted from lead. Original source: ${lead.source}`,
+      });
 
-      if (contactError) throw contactError;
-
-      const { error: deleteError } = await supabase
-        .from('leads')
-        .delete()
-        .eq('id', lead.id);
-
-      if (deleteError) throw deleteError;
+      await apiDelete(`/leads/${lead.id}`);
 
       alert(`${lead.name} has been added to CRM as a contact!`);
-      loadLeads();
+      await loadLeads();
     } catch (error) {
       console.error('Error converting lead to CRM:', error);
-      alert('Failed to convert lead. Please try again.');
+      alert(error instanceof Error ? error.message : 'Failed to convert lead. Please try again.');
     }
   };
 
@@ -249,54 +241,17 @@ export function Leads() {
     setUploading(true);
 
     try {
-      const text = await file.text();
-      const lines = text.split('\n').filter(line => line.trim());
+      const formData = new FormData();
+      formData.append('file', file);
 
-      if (lines.length < 2) {
-        alert('CSV file must have at least a header row and one data row');
-        return;
-      }
+      const response = await apiPost<{ count?: number; success?: boolean }>('/leads/upload', formData);
 
-      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-      const nameIndex = headers.findIndex(h => h.includes('name'));
-      const emailIndex = headers.findIndex(h => h.includes('email'));
-      const phoneIndex = headers.findIndex(h => h.includes('phone'));
-
-      if (nameIndex === -1 || emailIndex === -1) {
-        alert('CSV must include "name" and "email" columns');
-        return;
-      }
-
-      const leadsToInsert = [];
-      for (let i = 1; i < lines.length; i++) {
-        const values = lines[i].split(',').map(v => v.trim());
-        if (values.length > 1 && values[nameIndex] && values[emailIndex]) {
-          leadsToInsert.push({
-            name: values[nameIndex],
-            email: values[emailIndex],
-            phone: phoneIndex !== -1 ? values[phoneIndex] : '',
-            source: 'csv_upload',
-            date: new Date().toISOString(),
-            user_id: user.id
-          });
-        }
-      }
-
-      if (leadsToInsert.length === 0) {
-        alert('No valid leads found in CSV');
-        return;
-      }
-
-      const { error } = await supabase.from('leads').insert(leadsToInsert);
-
-      if (error) throw error;
-
-      alert(`Successfully uploaded ${leadsToInsert.length} leads!`);
+      alert(`Successfully uploaded ${response?.count || 0} leads!`);
       setShowUploadModal(false);
-      loadLeads();
+      await loadLeads();
     } catch (error) {
       console.error('Error uploading CSV:', error);
-      alert('Failed to upload CSV. Please check the format and try again.');
+      alert(error instanceof Error ? error.message : 'Failed to upload CSV. Please check the format and try again.');
     } finally {
       setUploading(false);
       if (fileInputRef.current) {
@@ -682,7 +637,7 @@ export function Leads() {
                       </div>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600 whitespace-nowrap">
-                      {formatDate(lead.date)}
+                      {formatDate(lead.timestamp)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-2">
