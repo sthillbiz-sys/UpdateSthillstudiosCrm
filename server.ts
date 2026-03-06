@@ -61,6 +61,10 @@ type JoinInfo = {
   roomId: string;
 };
 
+function isAdminRole(role: string | null | undefined): boolean {
+  return String(role || "").trim().toLowerCase().includes("admin");
+}
+
 type UserRow = {
   id: number;
   name: string;
@@ -300,9 +304,15 @@ async function startServer() {
           return;
         }
 
+        if (isAdminRole(sender.role)) {
+          return;
+        }
+
         const payload = JSON.stringify({
           type: "help-alert",
           agentName: sender.name,
+          agentEmail: authUser.email,
+          page: typeof message.page === "string" && message.page.trim() ? message.page.trim() : sender.roomId,
           timestamp: new Date().toISOString(),
         });
 
@@ -311,7 +321,7 @@ async function startServer() {
             return;
           }
           const recipient = clients.get(clientSocket);
-          if (recipient && (recipient.role === "admin" || recipient.role === "manager")) {
+          if (recipient && isAdminRole(recipient.role)) {
             clientSocket.send(payload);
           }
         });

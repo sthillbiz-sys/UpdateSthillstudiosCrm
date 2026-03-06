@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../lib/auth';
 import { LayoutDashboard, Users, FolderKanban, Sparkles, Calendar as CalendarIcon, Clock, MessageSquare, Video, BarChart3, CircleUser as UserCircle, LogOut, Menu, X, HelpCircle, Monitor } from 'lucide-react';
 import { Dashboard } from './Dashboard';
@@ -17,6 +17,7 @@ import { FloatingActions } from './FloatingActions';
 import { QuickCall } from './QuickCall';
 import { PhoneDialer } from './PhoneDialer';
 import { LOGO_SRC } from '../lib/assets';
+import { createWsUrl } from '../lib/api';
 
 type View = 'dashboard' | 'crm' | 'projects' | 'leads' | 'calendar' | 'timeTracking' | 'messages' | 'meetings' | 'callReports' | 'employees' | 'agentDashboards';
 
@@ -26,8 +27,11 @@ export function CRM() {
   const [showQuickCall, setShowQuickCall] = useState(false);
   const [showPhoneDialer, setShowPhoneDialer] = useState(false);
   const { signOut, user } = useAuth();
+  const helpSocketRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
 
   const isOwner = user?.email === 'thesthillstudios@gmail.com';
+  const isAdmin = String(user?.role || '').toLowerCase().includes('admin');
   const accountName = user?.name?.trim() || user?.email?.split('@')[0] || 'User';
   const accountInitials = accountName
     .split(/\s+/)
@@ -54,20 +58,122 @@ export function CRM() {
     { id: 'employees', label: 'Employees', icon: UserCircle, color: 'text-indigo-400' },
   ];
 
-  const handleRequestHelp = () => {
-    const userName = user?.email?.split('@')[0] || 'User';
-    const formattedName = userName.split('.').map((n: string) => n.charAt(0).toUpperCase() + n.slice(1)).join(' ');
+  useEffect(() => {
+    if (!user) {
+      if (helpSocketRef.current) {
+        helpSocketRef.current.close();
+        helpSocketRef.current = null;
+      }
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      return;
+    }
 
-    const event = new CustomEvent('helpRequest', {
-      detail: {
-        id: Date.now().toString(),
-        userName: formattedName,
-        userEmail: user?.email || '',
-        page: currentView,
-        timestamp: new Date().toISOString(),
-      },
-    });
-    window.dispatchEvent(event);
+    let disposed = false;
+
+    const scheduleReconnect = () => {
+      if (disposed || reconnectTimerRef.current !== null) {
+        return;
+      }
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = null;
+        connect();
+      }, 3000);
+    };
+
+    const connect = () => {
+      if (disposed) {
+        return;
+      }
+
+      const wsUrl = createWsUrl();
+      if (!wsUrl) {
+        return;
+      }
+
+      const socket = new WebSocket(wsUrl);
+      helpSocketRef.current = socket;
+
+      socket.addEventListener('open', () => {
+        socket.send(JSON.stringify({
+          type: 'join',
+          roomId: 'help-notifications',
+          name: user.name || user.email || 'User',
+        }));
+      });
+
+      socket.addEventListener('message', (event) => {
+        try {
+          const payload = JSON.parse(event.data as string) as {
+            type?: string;
+            agentName?: string;
+            agentEmail?: string;
+            page?: string;
+            timestamp?: string;
+          };
+
+          if (payload.type !== 'help-alert' || !isAdmin) {
+            return;
+          }
+
+          window.dispatchEvent(new CustomEvent('helpRequest', {
+            detail: {
+              id: `${payload.agentEmail || payload.agentName || 'help'}-${payload.timestamp || Date.now()}`,
+              userName: payload.agentName || 'User',
+              userEmail: payload.agentEmail || '',
+              page: payload.page || 'dashboard',
+              timestamp: payload.timestamp || new Date().toISOString(),
+            },
+          }));
+        } catch {
+          // Ignore malformed websocket payloads.
+        }
+      });
+
+      socket.addEventListener('close', () => {
+        if (helpSocketRef.current === socket) {
+          helpSocketRef.current = null;
+        }
+        scheduleReconnect();
+      });
+
+      socket.addEventListener('error', () => {
+        socket.close();
+      });
+    };
+
+    connect();
+
+    return () => {
+      disposed = true;
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      if (helpSocketRef.current) {
+        helpSocketRef.current.close();
+        helpSocketRef.current = null;
+      }
+    };
+  }, [isAdmin, user]);
+
+  const handleRequestHelp = () => {
+    if (!user || isAdmin) {
+      return;
+    }
+
+    const socket = helpSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      window.alert('Help request is temporarily unavailable. Please try again in a moment.');
+      return;
+    }
+
+    socket.send(JSON.stringify({
+      type: 'help-request',
+      page: currentView,
+    }));
   };
 
   const renderView = () => {
@@ -150,7 +256,8 @@ export function CRM() {
           <div className="p-3 border-t border-slate-800">
             <button
               onClick={handleRequestHelp}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-md transition-colors text-sm text-gray-400 hover:bg-slate-800 hover:text-white mb-3"
+              disabled={isAdmin}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-md transition-colors text-sm text-gray-400 hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 mb-3"
             >
               <HelpCircle className="w-4 h-4" />
               <span>Request Help</span>

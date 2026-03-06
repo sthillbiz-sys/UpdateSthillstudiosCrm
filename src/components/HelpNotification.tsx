@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AlertCircle, X } from 'lucide-react';
+import { useAuth } from '../lib/auth';
 
 interface HelpRequest {
   id: string;
@@ -10,9 +11,16 @@ interface HelpRequest {
 }
 
 export function HelpNotification() {
+  const { user } = useAuth();
   const [requests, setRequests] = useState<HelpRequest[]>([]);
+  const isAdmin = String(user?.role || '').toLowerCase().includes('admin');
 
   useEffect(() => {
+    if (!isAdmin) {
+      setRequests([]);
+      return;
+    }
+
     const handleHelpRequest = (event: CustomEvent<HelpRequest>) => {
       setRequests(prev => [event.detail, ...prev]);
 
@@ -23,13 +31,13 @@ export function HelpNotification() {
 
     window.addEventListener('helpRequest' as any, handleHelpRequest);
     return () => window.removeEventListener('helpRequest' as any, handleHelpRequest);
-  }, []);
+  }, [isAdmin]);
 
   const dismissRequest = (id: string) => {
     setRequests(prev => prev.filter(r => r.id !== id));
   };
 
-  if (requests.length === 0) return null;
+  if (!isAdmin || requests.length === 0) return null;
 
   return (
     <div className="fixed top-4 right-4 z-[100] space-y-3">
