@@ -2,15 +2,24 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useEmployee } from '../lib/employee';
 import { Users as Users2, TrendingUp, Phone, Calendar, DollarSign, Eye, X } from 'lucide-react';
+import { apiGet, apiPut } from '../lib/api';
 
 interface Agent {
   id: string;
+  userId: string | null;
   email: string;
   full_name: string;
   role: string;
   assigned_color: string;
   status?: string;
   isOnline: boolean;
+}
+
+interface AuthUserRecord {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
 }
 
 interface AgentStats {
@@ -26,6 +35,15 @@ interface AgentDashboardDetails {
   meetings: Array<{ id: string; title?: string; scheduled_date?: string; scheduled_time?: string; status?: string }>;
 }
 
+interface AssignableLead {
+  id: number;
+  name: string;
+  email: string;
+  source: string;
+  timestamp: string;
+  assignedTo: string | null;
+}
+
 export function AgentDashboards() {
   const { isAdmin, allEmployees, loading: employeesLoading, refreshAllEmployees } = useEmployee();
   const [onlinePresence, setOnlinePresence] = useState<Record<string, boolean>>({});
@@ -36,13 +54,22 @@ export function AgentDashboards() {
   const [agentDetails, setAgentDetails] = useState<Record<string, AgentDashboardDetails>>({});
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [presenceLoading, setPresenceLoading] = useState(true);
+  const [authUsersByEmail, setAuthUsersByEmail] = useState<Record<string, AuthUserRecord>>({});
+  const [assigningAgentId, setAssigningAgentId] = useState<string | null>(null);
+  const [assignableLeads, setAssignableLeads] = useState<AssignableLead[]>([]);
+  const [selectedLeadIds, setSelectedLeadIds] = useState<number[]>([]);
+  const [leadSearch, setLeadSearch] = useState('');
+  const [loadingAssignableLeads, setLoadingAssignableLeads] = useState(false);
+  const [savingAssignments, setSavingAssignments] = useState(false);
 
   const agents = useMemo<Agent[]>(() => {
     const mapped = allEmployees.map((emp) => {
       const email = String(emp.email || '').trim();
       const emailKey = email.toLowerCase();
+      const linkedUser = emailKey !== '' ? authUsersByEmail[emailKey] || null : null;
       return {
         id: emp.id,
+        userId: linkedUser ? String(linkedUser.id) : null,
         email,
         full_name: emp.full_name || (email !== '' ? email.split('@')[0] : 'Agent'),
         role: emp.role,
@@ -61,15 +88,62 @@ export function AgentDashboards() {
 
     // Fallback for legacy data where non-admin team members may still be "employee".
     return mapped.filter((emp) => emp.role !== 'admin');
-  }, [allEmployees, onlinePresence]);
+  }, [allEmployees, authUsersByEmail, onlinePresence]);
+
+  const selectedAgentMeta = useMemo(
+    () => agents.find((agent) => agent.id === selectedAgent) || null,
+    [agents, selectedAgent],
+  );
+
+  const assigningAgent = useMemo(
+    () => agents.find((agent) => agent.id === assigningAgentId) || null,
+    [agents, assigningAgentId],
+  );
+
+  const filteredAssignableLeads = useMemo(() => {
+    const query = leadSearch.trim().toLowerCase();
+    const rows = assignableLeads.filter((lead) => {
+      if (!query) {
+        return true;
+      }
+      return (
+        lead.name.toLowerCase().includes(query) ||
+        lead.email.toLowerCase().includes(query) ||
+        lead.source.toLowerCase().includes(query)
+      );
+    });
+
+    return rows.sort((left, right) => {
+      const leftAssigned = left.assignedTo === assigningAgent?.userId ? 1 : 0;
+      const rightAssigned = right.assignedTo === assigningAgent?.userId ? 1 : 0;
+      if (leftAssigned !== rightAssigned) {
+        return leftAssigned - rightAssigned;
+      }
+      return right.id - left.id;
+    });
+  }, [assignableLeads, assigningAgent?.userId, leadSearch]);
+
+  const selectableFilteredLeadIds = useMemo(
+    () =>
+      filteredAssignableLeads
+        .filter((lead) => lead.assignedTo !== assigningAgent?.userId)
+        .map((lead) => lead.id),
+    [assigningAgent?.userId, filteredAssignableLeads],
+  );
+
+  const allFilteredLeadsSelected =
+    selectableFilteredLeadIds.length > 0 &&
+    selectableFilteredLeadIds.every((leadId) => selectedLeadIds.includes(leadId));
 
   useEffect(() => {
     if (!isAdmin) {
       return;
     }
     void refreshAllEmployees();
+    void loadAuthUsers();
     const refreshId = window.setInterval(() => {
       void refreshAllEmployees();
+      void loadAuthUsers();
     }, 30000);
     return () => {
       window.clearInterval(refreshId);
@@ -154,8 +228,31 @@ export function AgentDashboards() {
     }
   };
 
+  const loadAuthUsers = async () => {
+    if (!isAdmin) {
+      setAuthUsersByEmail({});
+      return;
+    }
+
+    try {
+      const rows = await apiGet<AuthUserRecord[]>('/users');
+      const nextMap: Record<string, AuthUserRecord> = {};
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const email = String(row.email || '').trim().toLowerCase();
+        if (email === '') {
+          continue;
+        }
+        nextMap[email] = row;
+      }
+      setAuthUsersByEmail(nextMap);
+    } catch (error) {
+      console.error('Error loading auth users:', error);
+      setAuthUsersByEmail({});
+    }
+  };
+
   const loadAllAgentStats = async (agentList: Agent[]) => {
-    const statsPromises = agentList.map(agent => loadAgentStats(agent.id));
+    const statsPromises = agentList.map((agent) => loadAgentStats(agent));
     const results = await Promise.all(statsPromises);
 
     const statsMap: Record<string, AgentStats> = {};
@@ -182,12 +279,21 @@ export function AgentDashboards() {
     }
   };
 
-  const loadAgentStats = async (agentId: string): Promise<AgentStats> => {
+  const loadAgentStats = async (agent: Agent): Promise<AgentStats> => {
+    if (!agent.userId) {
+      return {
+        totalLeads: 0,
+        completedCalls: 0,
+        scheduledMeetings: 0,
+        revenue: 0,
+      };
+    }
+
     try {
       const [leadsData, callsData, meetingsData] = await Promise.all([
-        supabase.from('leads').select('id', { count: 'exact' }).eq('assigned_to', agentId),
-        supabase.from('call_history').select('id', { count: 'exact' }).eq('user_id', agentId),
-        supabase.from('meetings').select('id', { count: 'exact' }).eq('assigned_to', agentId),
+        supabase.from('leads').select('id', { count: 'exact' }).eq('assigned_to', agent.userId),
+        supabase.from('call_history').select('id', { count: 'exact' }).eq('user_id', agent.userId),
+        supabase.from('meetings').select('id', { count: 'exact' }).eq('assigned_to', agent.userId),
       ]);
 
       return {
@@ -211,26 +317,48 @@ export function AgentDashboards() {
     return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   };
 
-  const loadAgentDetails = async (agentId: string) => {
+  const normalizeAssignableLead = (row: Record<string, unknown>): AssignableLead => ({
+    id: Number(row.id || 0),
+    name: String(row.name || 'Unknown'),
+    email: String(row.email || ''),
+    source: String(row.source || 'manual'),
+    timestamp: String(row.timestamp || row.date || row.created_at || ''),
+    assignedTo:
+      row.created_by_user_id !== undefined &&
+      row.created_by_user_id !== null &&
+      row.created_by_user_id !== ''
+        ? String(row.created_by_user_id)
+        : null,
+  });
+
+  const loadAgentDetails = async (agent: Agent) => {
+    if (!agent.userId) {
+      setAgentDetails((prev) => ({
+        ...prev,
+        [agent.id]: { leads: [], calls: [], meetings: [] },
+      }));
+      return;
+    }
+
     setLoadingDetails(true);
     try {
       const [leadsRes, callsRes, meetingsRes] = await Promise.all([
         supabase
           .from('leads')
           .select('*')
-          .eq('assigned_to', agentId)
+          .eq('assigned_to', agent.userId)
           .order('created_at', { ascending: false })
           .limit(8),
         supabase
           .from('call_history')
           .select('*')
-          .eq('user_id', agentId)
+          .eq('user_id', agent.userId)
           .order('called_at', { ascending: false })
           .limit(8),
         supabase
           .from('meetings')
           .select('*')
-          .eq('assigned_to', agentId)
+          .eq('assigned_to', agent.userId)
           .order('scheduled_date', { ascending: false })
           .order('scheduled_time', { ascending: false })
           .limit(8),
@@ -238,7 +366,7 @@ export function AgentDashboards() {
 
       setAgentDetails((prev) => ({
         ...prev,
-        [agentId]: {
+        [agent.id]: {
           leads: leadsRes.data || [],
           calls: callsRes.data || [],
           meetings: meetingsRes.data || [],
@@ -248,7 +376,7 @@ export function AgentDashboards() {
       console.error('Error loading agent details:', error);
       setAgentDetails((prev) => ({
         ...prev,
-        [agentId]: { leads: [], calls: [], meetings: [] },
+        [agent.id]: { leads: [], calls: [], meetings: [] },
       }));
     } finally {
       setLoadingDetails(false);
@@ -257,8 +385,93 @@ export function AgentDashboards() {
 
   const handleOpenAgentDashboard = async (agentId: string) => {
     setSelectedAgent(agentId);
-    if (!agentDetails[agentId]) {
-      await loadAgentDetails(agentId);
+    const agent = agents.find((item) => item.id === agentId);
+    if (agent && !agentDetails[agentId]) {
+      await loadAgentDetails(agent);
+    }
+  };
+
+  const loadAssignableLeads = async () => {
+    setLoadingAssignableLeads(true);
+    try {
+      const rows = await apiGet<Record<string, unknown>[]>('/leads');
+      const mapped = Array.isArray(rows) ? rows.map(normalizeAssignableLead) : [];
+      setAssignableLeads(mapped);
+    } catch (error) {
+      console.error('Error loading leads for assignment:', error);
+      setAssignableLeads([]);
+    } finally {
+      setLoadingAssignableLeads(false);
+    }
+  };
+
+  const handleOpenAssignModal = async (agent: Agent) => {
+    if (!agent.userId) {
+      window.alert(`No linked login user was found for ${agent.full_name}. Match the employee email to a user account first.`);
+      return;
+    }
+
+    setAssigningAgentId(agent.id);
+    setSelectedLeadIds([]);
+    setLeadSearch('');
+    await loadAssignableLeads();
+  };
+
+  const toggleSelectedLead = (leadId: number) => {
+    setSelectedLeadIds((current) =>
+      current.includes(leadId)
+        ? current.filter((id) => id !== leadId)
+        : [...current, leadId],
+    );
+  };
+
+  const toggleSelectAllFilteredLeads = () => {
+    if (selectableFilteredLeadIds.length === 0) {
+      return;
+    }
+
+    setSelectedLeadIds((current) => {
+      if (allFilteredLeadsSelected) {
+        return current.filter((leadId) => !selectableFilteredLeadIds.includes(leadId));
+      }
+
+      return Array.from(new Set([...current, ...selectableFilteredLeadIds]));
+    });
+  };
+
+  const handleAssignSelectedLeads = async () => {
+    if (!assigningAgent?.userId || selectedLeadIds.length === 0) {
+      return;
+    }
+
+    setSavingAssignments(true);
+    try {
+      const results = await Promise.allSettled(
+        selectedLeadIds.map((leadId) =>
+          apiPut(`/leads/${leadId}`, { created_by_user_id: Number(assigningAgent.userId) }),
+        ),
+      );
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failures.length > 0) {
+        const firstFailure = failures[0]?.reason;
+        throw (
+          firstFailure instanceof Error
+            ? firstFailure
+            : new Error('Failed to assign one or more leads.')
+        );
+      }
+
+      setSelectedLeadIds([]);
+      await Promise.all([
+        loadAssignableLeads(),
+        loadAllAgentStats(agents),
+        selectedAgent === assigningAgent.id ? loadAgentDetails(assigningAgent) : Promise.resolve(),
+      ]);
+    } catch (error) {
+      console.error('Error assigning leads:', error);
+      window.alert(error instanceof Error ? error.message : 'Failed to assign leads.');
+    } finally {
+      setSavingAssignments(false);
     }
   };
 
@@ -418,13 +631,22 @@ export function AgentDashboards() {
                     </div>
                   </div>
 
-                  <button
-                    onClick={() => void handleOpenAgentDashboard(agent.id)}
-                    className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                  >
-                    <Eye className="w-4 h-4" />
-                    View Dashboard
-                  </button>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      onClick={() => void handleOpenAssignModal(agent)}
+                      disabled={!agent.userId}
+                      className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-200 disabled:text-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                    >
+                      Assign Leads
+                    </button>
+                    <button
+                      onClick={() => void handleOpenAgentDashboard(agent.id)}
+                      className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                    >
+                      <Eye className="w-4 h-4" />
+                      View Dashboard
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -438,7 +660,7 @@ export function AgentDashboards() {
             <div className="sticky top-0 bg-white border-b border-gray-200 p-6 flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold text-slate-900">
-                  {agents.find(a => a.id === selectedAgent)?.full_name}'s Dashboard
+                  {selectedAgentMeta?.full_name || 'Agent'}'s Dashboard
                 </h2>
                 <p className="text-sm text-gray-600">Detailed performance metrics</p>
               </div>
@@ -531,6 +753,121 @@ export function AgentDashboards() {
                   </div>
                 </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {assigningAgent && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+            <div className="border-b border-gray-200 p-6 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">Assign Leads to {assigningAgent.full_name}</h2>
+                <p className="text-sm text-gray-600">
+                  Select leads to drop into this agent&apos;s queue.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setAssigningAgentId(null);
+                  setSelectedLeadIds([]);
+                  setLeadSearch('');
+                }}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-6 border-b border-gray-200 flex flex-col md:flex-row md:items-center gap-3">
+              <input
+                type="text"
+                value={leadSearch}
+                onChange={(event) => setLeadSearch(event.target.value)}
+                placeholder="Search leads by name, email, or source"
+                className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              />
+              <button
+                onClick={toggleSelectAllFilteredLeads}
+                disabled={selectableFilteredLeadIds.length === 0}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {allFilteredLeadsSelected ? 'Unselect Filtered' : 'Select Filtered'}
+              </button>
+              <div className="text-sm text-gray-600">
+                {selectedLeadIds.length} selected
+              </div>
+            </div>
+
+            <div className="max-h-[50vh] overflow-y-auto p-6 space-y-3 bg-gray-50">
+              {loadingAssignableLeads && (
+                <div className="text-sm text-gray-500">Loading leads...</div>
+              )}
+
+              {!loadingAssignableLeads && filteredAssignableLeads.length === 0 && (
+                <div className="rounded-lg border border-dashed border-gray-300 bg-white p-6 text-center text-sm text-gray-500">
+                  No leads match your search.
+                </div>
+              )}
+
+              {!loadingAssignableLeads && filteredAssignableLeads.map((lead) => {
+                const alreadyAssignedHere = lead.assignedTo === assigningAgent.userId;
+                return (
+                  <label
+                    key={lead.id}
+                    className={`flex items-start gap-3 rounded-lg border p-4 transition-colors ${
+                      alreadyAssignedHere ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-white hover:border-gray-300'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedLeadIds.includes(lead.id)}
+                      onChange={() => toggleSelectedLead(lead.id)}
+                      disabled={alreadyAssignedHere}
+                      className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                        <div>
+                          <p className="font-medium text-slate-900">{lead.name}</p>
+                          <p className="text-sm text-gray-500">{lead.email || 'No email provided'}</p>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600 uppercase">
+                            {lead.source || 'manual'}
+                          </span>
+                          <span className={`rounded-full px-2 py-1 ${
+                            alreadyAssignedHere ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
+                          }`}>
+                            {alreadyAssignedHere ? 'Already assigned here' : lead.assignedTo ? 'Assigned elsewhere' : 'Unassigned'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div className="border-t border-gray-200 p-6 flex items-center justify-between gap-3">
+              <button
+                onClick={() => {
+                  setAssigningAgentId(null);
+                  setSelectedLeadIds([]);
+                  setLeadSearch('');
+                }}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Close
+              </button>
+              <button
+                onClick={() => void handleAssignSelectedLeads()}
+                disabled={savingAssignments || selectedLeadIds.length === 0}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+              >
+                {savingAssignments ? 'Assigning...' : `Assign ${selectedLeadIds.length} Lead${selectedLeadIds.length === 1 ? '' : 's'}`}
+              </button>
             </div>
           </div>
         </div>

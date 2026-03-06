@@ -339,6 +339,21 @@ try {
         }
     }
 
+    if ($route === 'users' && $method === 'GET') {
+        if (!str_contains($authRole, 'admin')) {
+            json_response(['error' => 'Forbidden'], 403);
+        }
+
+        $stmt = db()->query('SELECT id, name, email, role FROM users ORDER BY name ASC, email ASC');
+        $rows = $stmt->fetchAll();
+        $payload = [];
+        foreach ($rows as $row) {
+            $payload[] = safe_user_from_row($row);
+        }
+
+        json_response($payload);
+    }
+
     if ($route === 'presence' && $method === 'GET') {
         collapse_duplicate_employee_rows();
         $stmt = db()->query(
