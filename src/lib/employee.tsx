@@ -58,6 +58,23 @@ function mapEmployee(row: any): Employee {
   };
 }
 
+function dedupeEmployees(rows: Employee[]): Employee[] {
+  const seen = new Set<string>();
+  const deduped: Employee[] = [];
+
+  for (const row of rows) {
+    const email = String(row.email || '').trim().toLowerCase();
+    const key = email !== '' ? `email:${email}` : `id:${row.id}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(row);
+  }
+
+  return deduped;
+}
+
 export function EmployeeProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [currentEmployee, setCurrentEmployee] = useState<Employee | null>(null);
@@ -108,7 +125,7 @@ export function EmployeeProvider({ children }: { children: ReactNode }) {
         .order('full_name');
 
       if (error) throw error;
-      if (data) setAllEmployees(data.map(mapEmployee));
+      if (data) setAllEmployees(dedupeEmployees(data.map(mapEmployee)));
     } catch (error) {
       console.error('Error loading all employees:', error);
     }

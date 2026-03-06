@@ -73,6 +73,35 @@ function mapPresenceRow(row: any): UserPresence {
   };
 }
 
+function presenceIdentityKey(presence: UserPresence): string {
+  if (presence.user_id > 0) {
+    return `id:${presence.user_id}`;
+  }
+
+  const email = String(presence.employee?.email || '').trim().toLowerCase();
+  if (email !== '') {
+    return `email:${email}`;
+  }
+
+  return `name:${String(presence.name || '').trim().toLowerCase()}`;
+}
+
+function dedupePresenceRows(rows: UserPresence[]): UserPresence[] {
+  const seen = new Set<string>();
+  const deduped: UserPresence[] = [];
+
+  for (const row of rows) {
+    const key = presenceIdentityKey(row);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(row);
+  }
+
+  return deduped;
+}
+
 export function PresenceProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [myPresence, setMyPresence] = useState<UserPresence | null>(null);
@@ -104,7 +133,7 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
 
     try {
       const rows = await apiGet<any[]>('/presence');
-      const mapped = Array.isArray(rows) ? rows.map(mapPresenceRow) : [];
+      const mapped = Array.isArray(rows) ? dedupePresenceRows(rows.map(mapPresenceRow)) : [];
       const onlineOnly = mapped.filter((presence) => presence.status !== 'offline');
       setTeamPresence(onlineOnly);
 

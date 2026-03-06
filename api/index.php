@@ -319,7 +319,28 @@ try {
         ]);
     }
 
+    if ($route === 'telnyx/access-token' && $method === 'POST') {
+        if ($authUserId <= 0) {
+            json_response(['error' => 'Invalid auth context'], 401);
+        }
+
+        try {
+            $result = telnyx_issue_access_token();
+            json_response([
+                'token' => (string) ($result['token'] ?? ''),
+                'callerNumber' => (string) ($result['caller_number'] ?? ''),
+                'expiresAt' => (string) ($result['expires_at'] ?? ''),
+                'expiresIn' => (int) ($result['expires_in'] ?? 0),
+            ]);
+        } catch (RuntimeException $e) {
+            json_response(['error' => $e->getMessage()], 503);
+        } catch (Throwable $e) {
+            json_response(['error' => 'Unable to initialize Telnyx dialer'], 502);
+        }
+    }
+
     if ($route === 'presence' && $method === 'GET') {
+        collapse_duplicate_employee_rows();
         $stmt = db()->query(
             'SELECT
                 p.user_id,
@@ -1247,6 +1268,7 @@ try {
 
     if ($route === 'employees' && $method === 'GET') {
         ensure_employee_records_for_all_users();
+        collapse_duplicate_employee_rows();
         $rows = db()->query('SELECT * FROM employees ORDER BY id DESC')->fetchAll();
         json_response($rows);
     }

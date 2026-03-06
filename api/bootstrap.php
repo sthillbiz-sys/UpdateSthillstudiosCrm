@@ -269,6 +269,150 @@ function normalize_employee_role_from_user_role(?string $value): string {
     return 'employee';
 }
 
+function employee_role_priority(?string $value): int {
+    $role = normalize_employee_role_from_user_role($value);
+    if ($role === 'admin') {
+        return 3;
+    }
+    if ($role === 'agent') {
+        return 2;
+    }
+    return 1;
+}
+
+function collapse_duplicate_employee_rows_for_email(string $email): void {
+    $normalizedEmail = strtolower(trim($email));
+    if ($normalizedEmail === '') {
+        return;
+    }
+
+    $pdo = db();
+    $select = $pdo->prepare('SELECT * FROM employees WHERE LOWER(email) = LOWER(?) ORDER BY id ASC');
+    $select->execute([$normalizedEmail]);
+    $rows = $select->fetchAll();
+
+    if (count($rows) <= 1) {
+        return;
+    }
+
+    $keeper = $rows[0];
+    $keeperId = (int) ($keeper['id'] ?? 0);
+    if ($keeperId <= 0) {
+        return;
+    }
+
+    $mergedName = trim((string) ($keeper['name'] ?? ''));
+    $mergedRole = trim((string) ($keeper['role'] ?? ''));
+    $mergedContactInfo = trim((string) ($keeper['contact_info'] ?? ''));
+    $mergedStatus = trim((string) ($keeper['status'] ?? ''));
+    $mergedHourlyRate = $keeper['hourly_rate'] ?? null;
+    $mergedHireDate = trim((string) ($keeper['hire_date'] ?? ''));
+
+    foreach ($rows as $row) {
+        $name = trim((string) ($row['name'] ?? ''));
+        if ($mergedName === '' && $name !== '') {
+            $mergedName = $name;
+        }
+
+        $role = trim((string) ($row['role'] ?? ''));
+        if ($role !== '' && employee_role_priority($role) > employee_role_priority($mergedRole)) {
+            $mergedRole = $role;
+        }
+
+        $contactInfo = trim((string) ($row['contact_info'] ?? ''));
+        if ($mergedContactInfo === '' && $contactInfo !== '') {
+            $mergedContactInfo = $contactInfo;
+        }
+
+        $status = trim((string) ($row['status'] ?? ''));
+        if ($mergedStatus === '' && $status !== '') {
+            $mergedStatus = $status;
+        } elseif (strtolower($mergedStatus) !== 'active' && strtolower($status) === 'active') {
+            $mergedStatus = $status;
+        }
+
+        if (($mergedHourlyRate === null || $mergedHourlyRate === '') && array_key_exists('hourly_rate', $row)) {
+            $candidateHourlyRate = $row['hourly_rate'] ?? null;
+            if ($candidateHourlyRate !== null && $candidateHourlyRate !== '') {
+                $mergedHourlyRate = $candidateHourlyRate;
+            }
+        }
+
+        $hireDate = trim((string) ($row['hire_date'] ?? ''));
+        if ($mergedHireDate === '' && $hireDate !== '') {
+            $mergedHireDate = $hireDate;
+        }
+    }
+
+    $fields = [];
+    $params = [];
+
+    if (array_key_exists('name', $keeper) && trim((string) ($keeper['name'] ?? '')) !== $mergedName) {
+        $fields[] = 'name = ?';
+        $params[] = $mergedName;
+    }
+    if (array_key_exists('role', $keeper) && trim((string) ($keeper['role'] ?? '')) !== $mergedRole) {
+        $fields[] = 'role = ?';
+        $params[] = $mergedRole;
+    }
+    if (array_key_exists('contact_info', $keeper) && trim((string) ($keeper['contact_info'] ?? '')) !== $mergedContactInfo) {
+        $fields[] = 'contact_info = ?';
+        $params[] = $mergedContactInfo;
+    }
+    if (array_key_exists('status', $keeper) && trim((string) ($keeper['status'] ?? '')) !== $mergedStatus) {
+        $fields[] = 'status = ?';
+        $params[] = $mergedStatus;
+    }
+    if (array_key_exists('hourly_rate', $keeper) && ($keeper['hourly_rate'] ?? null) != $mergedHourlyRate) {
+        $fields[] = 'hourly_rate = ?';
+        $params[] = $mergedHourlyRate;
+    }
+    if (array_key_exists('hire_date', $keeper) && trim((string) ($keeper['hire_date'] ?? '')) !== $mergedHireDate) {
+        $fields[] = 'hire_date = ?';
+        $params[] = $mergedHireDate !== '' ? $mergedHireDate : null;
+    }
+
+    if (count($fields) > 0) {
+        $params[] = $keeperId;
+        $update = $pdo->prepare('UPDATE employees SET ' . implode(', ', $fields) . ' WHERE id = ?');
+        $update->execute($params);
+    }
+
+    $duplicateIds = [];
+    foreach (array_slice($rows, 1) as $row) {
+        $id = (int) ($row['id'] ?? 0);
+        if ($id > 0) {
+            $duplicateIds[] = $id;
+        }
+    }
+
+    if (count($duplicateIds) === 0) {
+        return;
+    }
+
+    $placeholders = implode(', ', array_fill(0, count($duplicateIds), '?'));
+    $delete = $pdo->prepare('DELETE FROM employees WHERE id IN (' . $placeholders . ')');
+    $delete->execute($duplicateIds);
+}
+
+function collapse_duplicate_employee_rows(): void {
+    $rows = db()->query(
+        'SELECT LOWER(email) AS email_key
+         FROM employees
+         WHERE email IS NOT NULL AND TRIM(email) <> ""
+         GROUP BY LOWER(email)
+         HAVING COUNT(*) > 1'
+    )->fetchAll();
+
+    foreach ($rows as $row) {
+        $emailKey = strtolower(trim((string) ($row['email_key'] ?? '')));
+        if ($emailKey === '') {
+            continue;
+        }
+        collapse_duplicate_employee_rows_for_email($emailKey);
+    }
+}
+
 function ensure_employee_record_for_user(array $userRow): void {
     $email = strtolower(trim((string) ($userRow['email'] ?? '')));
     if ($email === '') {
@@ -280,6 +424,8 @@ function ensure_employee_record_for_user(array $userRow): void {
         $name = explode('@', $email)[0] ?? 'User';
     }
     $role = normalize_employee_role_from_user_role((string) ($userRow['role'] ?? ''));
+
+    collapse_duplicate_employee_rows_for_email($email);
 
     $pdo = db();
     $select = $pdo->prepare('SELECT id, name, role FROM employees WHERE LOWER(email) = LOWER(?) ORDER BY id ASC LIMIT 1');
@@ -327,6 +473,7 @@ function ensure_employee_records_for_all_users(): void {
         }
         ensure_employee_record_for_user($row);
     }
+    collapse_duplicate_employee_rows();
 }
 
 function password_is_hash(string $value): bool {
@@ -743,4 +890,183 @@ function twilio_validate_signature(string $route, array $params): bool {
 
     $expected = base64_encode(hash_hmac('sha1', $signatureBase, $authToken, true));
     return hash_equals($expected, $signature);
+}
+
+function telnyx_access_token_ttl_seconds(): int {
+    $ttl = (int) env('TELNYX_ACCESS_TOKEN_TTL_SECONDS', '3600');
+    if ($ttl < 60) {
+        return 60;
+    }
+    if ($ttl > 86400) {
+        return 86400;
+    }
+    return $ttl;
+}
+
+function telnyx_api_base_url(): string {
+    $configured = trim((string) env('TELNYX_API_BASE_URL', 'https://api.telnyx.com/v2'));
+    return rtrim($configured, '/');
+}
+
+function telnyx_extract_token_from_response(string $body): string {
+    $decoded = json_decode($body, true);
+    if (is_array($decoded)) {
+        $topLevel = trim((string) ($decoded['token'] ?? ''));
+        if ($topLevel !== '') {
+            return $topLevel;
+        }
+
+        $data = $decoded['data'] ?? null;
+        if (is_string($data) && trim($data) !== '') {
+            return trim($data);
+        }
+        if (is_array($data)) {
+            $nested = trim((string) ($data['token'] ?? ''));
+            if ($nested !== '') {
+                return $nested;
+            }
+        }
+    }
+
+    $raw = trim($body);
+    if ($raw !== '' && !str_starts_with($raw, '{') && !str_starts_with($raw, '[')) {
+        return $raw;
+    }
+
+    return '';
+}
+
+function telnyx_decode_jwt_exp(string $token): ?int {
+    $parts = explode('.', $token);
+    if (count($parts) !== 3) {
+        return null;
+    }
+
+    $payload = json_decode(base64url_decode($parts[1]), true);
+    if (!is_array($payload)) {
+        return null;
+    }
+
+    $exp = $payload['exp'] ?? null;
+    if (!is_int($exp) && !is_numeric($exp)) {
+        return null;
+    }
+
+    $value = (int) $exp;
+    return $value > 0 ? $value : null;
+}
+
+function telnyx_http_post_json(string $url, string $apiKey, array $payload): array {
+    $body = json_encode($payload, JSON_UNESCAPED_SLASHES);
+    if (!is_string($body)) {
+        throw new RuntimeException('Failed to encode Telnyx payload.');
+    }
+
+    $headers = [
+        'Authorization: Bearer ' . $apiKey,
+        'Content-Type: application/json',
+        'Accept: application/json',
+    ];
+
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new RuntimeException('Failed to initialize Telnyx HTTP client.');
+        }
+
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 20);
+
+        $responseBody = curl_exec($ch);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($responseBody === false) {
+            throw new RuntimeException($curlError !== '' ? $curlError : 'Failed to reach Telnyx API.');
+        }
+
+        return [
+            'status' => $httpCode,
+            'body' => (string) $responseBody,
+        ];
+    }
+
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'POST',
+            'header' => implode("\r\n", $headers),
+            'content' => $body,
+            'timeout' => 20,
+            'ignore_errors' => true,
+        ],
+    ]);
+
+    $responseBody = @file_get_contents($url, false, $context);
+    $status = 0;
+    $responseHeaders = [];
+    if (function_exists('http_get_last_response_headers')) {
+        $headers = http_get_last_response_headers();
+        if (is_array($headers)) {
+            $responseHeaders = $headers;
+        }
+    }
+    if (isset($responseHeaders[0]) && preg_match('#HTTP/\S+\s+(\d{3})#', (string) $responseHeaders[0], $matches) === 1) {
+        $status = (int) $matches[1];
+    }
+    if ($responseBody === false) {
+        throw new RuntimeException('Failed to reach Telnyx API.');
+    }
+    if ($status === 0) {
+        // Older PHP versions may not expose response headers for stream wrappers.
+        $status = 200;
+    }
+
+    return [
+        'status' => $status,
+        'body' => (string) $responseBody,
+    ];
+}
+
+function telnyx_issue_access_token(): array {
+    $apiKey = trim((string) env('TELNYX_API_KEY', ''));
+    $credentialId = trim((string) env('TELNYX_TELEPHONY_CREDENTIAL_ID', ''));
+    $callerNumber = trim((string) env('TELNYX_CALLER_NUMBER', ''));
+
+    if ($apiKey === '' || $credentialId === '' || $callerNumber === '') {
+        throw new RuntimeException('Telnyx configuration is incomplete.');
+    }
+
+    $expiresAtUnix = time() + telnyx_access_token_ttl_seconds();
+    $expiresAtIso = gmdate('c', $expiresAtUnix);
+
+    $url = telnyx_api_base_url() . '/telephony_credentials/' . rawurlencode($credentialId) . '/token';
+    $response = telnyx_http_post_json($url, $apiKey, [
+        'expires_at' => $expiresAtIso,
+    ]);
+
+    $status = (int) ($response['status'] ?? 0);
+    $body = (string) ($response['body'] ?? '');
+
+    if ($status < 200 || $status >= 300) {
+        throw new RuntimeException('Unable to generate Telnyx access token.');
+    }
+
+    $token = telnyx_extract_token_from_response($body);
+    if ($token === '') {
+        throw new RuntimeException('Unexpected Telnyx access token response.');
+    }
+
+    $tokenExp = telnyx_decode_jwt_exp($token);
+    $effectiveExp = $tokenExp !== null ? $tokenExp : $expiresAtUnix;
+
+    return [
+        'token' => $token,
+        'caller_number' => $callerNumber,
+        'expires_at' => gmdate('c', $effectiveExp),
+        'expires_in' => max(0, $effectiveExp - time()),
+    ];
 }
