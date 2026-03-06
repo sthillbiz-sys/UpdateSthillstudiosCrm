@@ -62,6 +62,40 @@ export function TimeTracking() {
     return date ? date.toLocaleTimeString() : '-';
   };
 
+  const normalizeShiftEntry = (row: Record<string, unknown>): ShiftEntry => {
+    const rawTotalHours = row.total_hours;
+    return {
+      id: String(row.id ?? ''),
+      user_id: String(row.user_id ?? ''),
+      shift_date: String(row.shift_date || ''),
+      clock_in: String(row.clock_in || ''),
+      clock_out: row.clock_out ? String(row.clock_out) : undefined,
+      lunch_start: row.lunch_start ? String(row.lunch_start) : undefined,
+      lunch_end: row.lunch_end ? String(row.lunch_end) : undefined,
+      lunch_duration_minutes: Number(row.lunch_duration_minutes || 0),
+      total_hours:
+        rawTotalHours === null || rawTotalHours === undefined || rawTotalHours === ''
+          ? undefined
+          : Number(rawTotalHours),
+      status: (String(row.status || 'clocked_in') as ShiftEntry['status']),
+      notes: row.notes ? String(row.notes) : undefined,
+      created_at: String(row.created_at || ''),
+    };
+  };
+
+  const normalizeBreakEntry = (row: Record<string, unknown>): BreakEntry => ({
+    id: String(row.id ?? ''),
+    user_id: String(row.user_id ?? ''),
+    shift_id: row.shift_id !== undefined && row.shift_id !== null ? String(row.shift_id) : undefined,
+    break_start: String(row.break_start || ''),
+    break_end: row.break_end ? String(row.break_end) : undefined,
+    duration_minutes: Number(row.duration_minutes || 0),
+    break_type: String(row.break_type || '15-minute'),
+    status: (String(row.status || 'in_progress') as BreakEntry['status']),
+    notes: row.notes ? String(row.notes) : undefined,
+    created_at: String(row.created_at || ''),
+  });
+
   useEffect(() => {
     loadShifts();
     loadBreaks();
@@ -115,7 +149,7 @@ export function TimeTracking() {
         .limit(100);
 
       if (error) throw error;
-      if (data) setShifts(data);
+      if (data) setShifts(data.map(normalizeShiftEntry));
     } catch (error) {
       console.error('Error loading shifts:', error);
     } finally {
@@ -135,7 +169,7 @@ export function TimeTracking() {
         .limit(50);
 
       if (error) throw error;
-      if (data) setBreaks(data);
+      if (data) setBreaks(data.map(normalizeBreakEntry));
     } catch (error) {
       console.error('Error loading breaks:', error);
     }
@@ -153,7 +187,7 @@ export function TimeTracking() {
         .maybeSingle();
 
       if (error) throw error;
-      if (data) setActiveShift(data);
+      if (data) setActiveShift(normalizeShiftEntry(data));
     } catch (error) {
       console.error('Error checking active shift:', error);
     }
@@ -171,7 +205,7 @@ export function TimeTracking() {
         .maybeSingle();
 
       if (error) throw error;
-      if (data) setActiveBreak(data);
+      if (data) setActiveBreak(normalizeBreakEntry(data));
     } catch (error) {
       console.error('Error checking active break:', error);
     }
@@ -195,7 +229,7 @@ export function TimeTracking() {
         .single();
 
       if (error) throw error;
-      setActiveShift(data);
+      setActiveShift(data ? normalizeShiftEntry(data) : null);
       loadShifts();
     } catch (error) {
       console.error('Error starting shift:', error);
@@ -217,7 +251,7 @@ export function TimeTracking() {
         .single();
 
       if (error) throw error;
-      setActiveShift(data);
+      setActiveShift(data ? normalizeShiftEntry(data) : null);
       loadShifts();
     } catch (error) {
       console.error('Error starting lunch:', error);
@@ -247,7 +281,7 @@ export function TimeTracking() {
         .single();
 
       if (error) throw error;
-      setActiveShift(data);
+      setActiveShift(data ? normalizeShiftEntry(data) : null);
       loadShifts();
     } catch (error) {
       console.error('Error ending lunch:', error);
@@ -305,7 +339,7 @@ export function TimeTracking() {
         .single();
 
       if (error) throw error;
-      setActiveBreak(data);
+      setActiveBreak(data ? normalizeBreakEntry(data) : null);
       setShowBreakModal(false);
       loadBreaks();
     } catch (error) {
@@ -349,7 +383,8 @@ export function TimeTracking() {
   };
 
   const formatHours = (hours: number) => {
-    return `${hours.toFixed(2)}h`;
+    const safeHours = Number(hours || 0);
+    return `${safeHours.toFixed(2)}h`;
   };
 
   const getFilteredShifts = () => {
