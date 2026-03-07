@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Send, Search, Plus, User } from 'lucide-react';
 import { usePresence } from '../lib/presence';
 import { useAuth } from '../lib/auth';
@@ -63,6 +63,7 @@ export function Messages() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const { teamPresence } = usePresence();
 
   const selectedConversationMeta = useMemo(
@@ -179,6 +180,20 @@ export function Messages() {
     void loadConversationMessages(selectedConversation);
   }, [selectedConversation]);
 
+  const messages: Message[] = selectedConversation ? conversationMessages[selectedConversation] || [] : [];
+
+  useEffect(() => {
+    if (!selectedConversation || loadingMessages) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ block: 'end' });
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [loadingMessages, messages.length, selectedConversation]);
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'available':
@@ -218,8 +233,6 @@ export function Messages() {
         return status;
     }
   };
-
-  const messages: Message[] = selectedConversation ? conversationMessages[selectedConversation] || [] : [];
 
   const handleSendMessage = async () => {
     const content = messageInput.trim();
@@ -441,6 +454,7 @@ export function Messages() {
                   </div>
                 </div>
               ))}
+              <div ref={messagesEndRef} />
             </div>
 
             <div className="p-4 bg-white border-t border-gray-200">
