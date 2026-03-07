@@ -1461,24 +1461,33 @@ try {
     }
 
     if ($route === 'calendar-notes' && $method === 'GET') {
+        collapse_duplicate_employee_rows();
         $where = [];
         $params = [];
         $date = trim((string) ($_GET['date'] ?? ''));
         if ($date !== '') {
-            $where[] = 'note_date = ?';
+            $where[] = 'cn.note_date = ?';
             $params[] = $date;
         }
         $contactId = trim((string) ($_GET['contact_id'] ?? ''));
         if ($contactId !== '') {
-            $where[] = 'contact_id = ?';
+            $where[] = 'cn.contact_id = ?';
             $params[] = (int) $contactId;
         }
 
-        $sql = 'SELECT * FROM calendar_notes';
+        $sql = 'SELECT
+                    cn.*,
+                    COALESCE(NULLIF(TRIM(e.name), \'\'), NULLIF(TRIM(u.name), \'\'), NULLIF(TRIM(u.email), \'\'), \'Team Member\') AS author_name,
+                    COALESCE(NULLIF(TRIM(e.assigned_color), \'\'), NULL) AS author_assigned_color,
+                    u.email AS author_email,
+                    u.role AS author_role
+                FROM calendar_notes cn
+                LEFT JOIN users u ON u.id = cn.created_by_user_id
+                LEFT JOIN employees e ON LOWER(e.email) = LOWER(u.email)';
         if (count($where) > 0) {
             $sql .= ' WHERE ' . implode(' AND ', $where);
         }
-        $sql .= ' ORDER BY note_date DESC, created_at DESC';
+        $sql .= ' ORDER BY cn.note_date DESC, cn.created_at DESC';
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $rows = $stmt->fetchAll();
