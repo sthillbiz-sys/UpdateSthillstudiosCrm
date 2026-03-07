@@ -59,8 +59,12 @@ export function AgentDashboards() {
   const [assignableLeads, setAssignableLeads] = useState<AssignableLead[]>([]);
   const [selectedLeadIds, setSelectedLeadIds] = useState<number[]>([]);
   const [leadSearch, setLeadSearch] = useState('');
+  const [routingSearch, setRoutingSearch] = useState('');
   const [loadingAssignableLeads, setLoadingAssignableLeads] = useState(false);
   const [savingAssignments, setSavingAssignments] = useState(false);
+  const [draggingLeadId, setDraggingLeadId] = useState<number | null>(null);
+  const [dropTargetAgentId, setDropTargetAgentId] = useState<string | null>(null);
+  const [routingLeadId, setRoutingLeadId] = useState<number | null>(null);
 
   const agents = useMemo<Agent[]>(() => {
     const mapped = allEmployees.map((emp) => {
@@ -135,15 +139,34 @@ export function AgentDashboards() {
     selectableFilteredLeadIds.length > 0 &&
     selectableFilteredLeadIds.every((leadId) => selectedLeadIds.includes(leadId));
 
+  const draggableLeadPool = useMemo(() => {
+    const query = routingSearch.trim().toLowerCase();
+    return assignableLeads
+      .filter((lead) => !lead.assignedTo)
+      .filter((lead) => {
+        if (!query) {
+          return true;
+        }
+        return (
+          lead.name.toLowerCase().includes(query) ||
+          lead.email.toLowerCase().includes(query) ||
+          lead.source.toLowerCase().includes(query)
+        );
+      })
+      .slice(0, 18);
+  }, [assignableLeads, routingSearch]);
+
   useEffect(() => {
     if (!isAdmin) {
       return;
     }
     void refreshAllEmployees();
     void loadAuthUsers();
+    void loadAssignableLeads();
     const refreshId = window.setInterval(() => {
       void refreshAllEmployees();
       void loadAuthUsers();
+      void loadAssignableLeads();
     }, 30000);
     return () => {
       window.clearInterval(refreshId);
@@ -417,6 +440,22 @@ export function AgentDashboards() {
     await loadAssignableLeads();
   };
 
+  const persistLeadAssignment = async (leadId: number, agent: Agent) => {
+    if (!agent.userId) {
+      throw new Error(`No linked login user was found for ${agent.full_name}.`);
+    }
+
+    await apiPut(`/leads/${leadId}`, { created_by_user_id: Number(agent.userId) });
+  };
+
+  const refreshAgentAssignmentViews = async (agent: Agent) => {
+    await Promise.all([
+      loadAssignableLeads(),
+      loadAllAgentStats(agents),
+      selectedAgent === agent.id ? loadAgentDetails(agent) : Promise.resolve(),
+    ]);
+  };
+
   const toggleSelectedLead = (leadId: number) => {
     setSelectedLeadIds((current) =>
       current.includes(leadId)
@@ -447,9 +486,7 @@ export function AgentDashboards() {
     setSavingAssignments(true);
     try {
       const results = await Promise.allSettled(
-        selectedLeadIds.map((leadId) =>
-          apiPut(`/leads/${leadId}`, { created_by_user_id: Number(assigningAgent.userId) }),
-        ),
+        selectedLeadIds.map((leadId) => persistLeadAssignment(leadId, assigningAgent)),
       );
       const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
       if (failures.length > 0) {
@@ -462,16 +499,32 @@ export function AgentDashboards() {
       }
 
       setSelectedLeadIds([]);
-      await Promise.all([
-        loadAssignableLeads(),
-        loadAllAgentStats(agents),
-        selectedAgent === assigningAgent.id ? loadAgentDetails(assigningAgent) : Promise.resolve(),
-      ]);
+      await refreshAgentAssignmentViews(assigningAgent);
     } catch (error) {
       console.error('Error assigning leads:', error);
       window.alert(error instanceof Error ? error.message : 'Failed to assign leads.');
     } finally {
       setSavingAssignments(false);
+    }
+  };
+
+  const handleDropLeadToAgent = async (leadId: number, agent: Agent) => {
+    if (!agent.userId || leadId <= 0) {
+      setDropTargetAgentId(null);
+      return;
+    }
+
+    setRoutingLeadId(leadId);
+    setDropTargetAgentId(null);
+    try {
+      await persistLeadAssignment(leadId, agent);
+      await refreshAgentAssignmentViews(agent);
+    } catch (error) {
+      console.error('Error routing lead:', error);
+      window.alert(error instanceof Error ? error.message : 'Failed to assign lead.');
+    } finally {
+      setDraggingLeadId(null);
+      setRoutingLeadId(null);
     }
   };
 
@@ -552,6 +605,63 @@ export function AgentDashboards() {
         </div>
       </div>
 
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-8">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-5">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">Lead Routing</h2>
+            <p className="text-sm text-gray-600">
+              Drag an unassigned lead and drop it on an agent card to assign it.
+            </p>
+          </div>
+          <input
+            type="text"
+            value={routingSearch}
+            onChange={(event) => setRoutingSearch(event.target.value)}
+            placeholder="Search unassigned leads"
+            className="w-full lg:w-72 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+          />
+        </div>
+
+        {loadingAssignableLeads ? (
+          <div className="text-sm text-gray-500">Loading lead queue...</div>
+        ) : draggableLeadPool.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-6 text-center text-sm text-gray-500">
+            No unassigned leads available to drag.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {draggableLeadPool.map((lead) => (
+              <div
+                key={lead.id}
+                draggable
+                onDragStart={(event) => {
+                  setDraggingLeadId(lead.id);
+                  event.dataTransfer.effectAllowed = 'move';
+                  event.dataTransfer.setData('text/plain', String(lead.id));
+                }}
+                onDragEnd={() => {
+                  setDraggingLeadId(null);
+                  setDropTargetAgentId(null);
+                }}
+                className={`rounded-lg border bg-slate-50 p-4 cursor-grab active:cursor-grabbing transition-colors ${
+                  draggingLeadId === lead.id ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-medium text-slate-900 truncate">{lead.name}</p>
+                    <p className="text-sm text-gray-500 truncate">{lead.email || 'No email provided'}</p>
+                  </div>
+                  <span className="rounded-full bg-white px-2 py-1 text-[11px] uppercase tracking-wide text-slate-600 border border-slate-200">
+                    {lead.source || 'manual'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {agents.length === 0 ? (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
           <Users2 className="w-16 h-16 text-gray-400 mx-auto mb-4" />
@@ -571,7 +681,27 @@ export function AgentDashboards() {
             return (
               <div
                 key={agent.id}
-                className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow"
+                onDragOver={(event) => {
+                  if (!agent.userId) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'move';
+                  setDropTargetAgentId(agent.id);
+                }}
+                onDragLeave={() => {
+                  setDropTargetAgentId((current) => (current === agent.id ? null : current));
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const rawLeadId = Number(event.dataTransfer.getData('text/plain') || draggingLeadId || 0);
+                  void handleDropLeadToAgent(rawLeadId, agent);
+                }}
+                className={`bg-white rounded-xl shadow-sm border overflow-hidden hover:shadow-md transition-all ${
+                  dropTargetAgentId === agent.id
+                    ? 'border-blue-500 ring-2 ring-blue-200'
+                    : 'border-gray-200'
+                }`}
               >
                 <div className="bg-gradient-to-r from-slate-800 to-slate-900 p-6">
                   <div className="flex items-center justify-between mb-4">
@@ -629,6 +759,18 @@ export function AgentDashboards() {
                       </div>
                       <p className="text-2xl font-bold text-slate-900">${stats.revenue}</p>
                     </div>
+                  </div>
+
+                  <div className={`mb-4 rounded-lg border border-dashed px-4 py-3 text-sm transition-colors ${
+                    dropTargetAgentId === agent.id
+                      ? 'border-blue-400 bg-blue-50 text-blue-700'
+                      : 'border-gray-200 bg-gray-50 text-gray-500'
+                  }`}>
+                    {!agent.userId
+                      ? 'This agent is not linked to a login user.'
+                      : routingLeadId !== null && dropTargetAgentId === agent.id
+                        ? 'Release to assign the dragged lead here'
+                        : 'Drop a lead here to assign it'}
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
