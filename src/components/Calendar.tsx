@@ -1,11 +1,61 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, StickyNote } from 'lucide-react';
 import { CalendarDayModal } from './CalendarDayModal';
 import { QuickCall } from './QuickCall';
 import { supabase } from '../lib/supabase';
 
+interface MonthNoteRow {
+  id: number | string;
+  note_date: string;
+  created_by_user_id?: number | string | null;
+  author_name?: string | null;
+  author_assigned_color?: string | null;
+}
+
+interface DayAgentSummary {
+  key: string;
+  name: string;
+  noteCount: number;
+  assignedColor?: string | null;
+}
+
+interface DayNotesSummary {
+  total: number;
+  agents: DayAgentSummary[];
+}
+
 interface DayNotes {
-  [key: string]: number;
+  [key: string]: DayNotesSummary;
+}
+
+function stringToHue(value: string): number {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = value.charCodeAt(index) + ((hash << 5) - hash);
+  }
+  return Math.abs(hash) % 360;
+}
+
+function buildAgentBadgeStyle(seed: string, fallbackColor?: string | null) {
+  const normalized = String(fallbackColor || '').trim();
+  if (/^#([0-9a-f]{6}|[0-9a-f]{3})$/i.test(normalized)) {
+    const expanded =
+      normalized.length === 4
+        ? `#${normalized[1]}${normalized[1]}${normalized[2]}${normalized[2]}${normalized[3]}${normalized[3]}`
+        : normalized;
+    return {
+      backgroundColor: `${expanded}1A`,
+      borderColor: `${expanded}4D`,
+      color: expanded,
+    };
+  }
+
+  const hue = stringToHue(seed);
+  return {
+    backgroundColor: `hsl(${hue} 90% 95%)`,
+    borderColor: `hsl(${hue} 75% 82%)`,
+    color: `hsl(${hue} 65% 34%)`,
+  };
 }
 
 export function Calendar() {
@@ -80,15 +130,53 @@ export function Calendar() {
     try {
       const { data, error } = await supabase
         .from('calendar_notes')
-        .select('note_date')
+        .select('*')
         .gte('note_date', firstDay)
         .lte('note_date', lastDay);
 
       if (error) throw error;
 
       const noteCounts: DayNotes = {};
-      data?.forEach((note) => {
-        noteCounts[note.note_date] = (noteCounts[note.note_date] || 0) + 1;
+      (data as MonthNoteRow[] | null)?.forEach((note) => {
+        const dateKey = note.note_date;
+        if (!dateKey) {
+          return;
+        }
+
+        if (!noteCounts[dateKey]) {
+          noteCounts[dateKey] = {
+            total: 0,
+            agents: [],
+          };
+        }
+
+        const daySummary = noteCounts[dateKey];
+        const authorKey = String(note.created_by_user_id || note.author_name || 'unknown');
+        const authorName = String(note.author_name || 'Team Member').trim() || 'Team Member';
+        const existingAuthor = daySummary.agents.find((agent) => agent.key === authorKey);
+
+        daySummary.total += 1;
+
+        if (existingAuthor) {
+          existingAuthor.noteCount += 1;
+          return;
+        }
+
+        daySummary.agents.push({
+          key: authorKey,
+          name: authorName,
+          noteCount: 1,
+          assignedColor: note.author_assigned_color || null,
+        });
+      });
+
+      Object.values(noteCounts).forEach((summary) => {
+        summary.agents.sort((left, right) => {
+          if (right.noteCount !== left.noteCount) {
+            return right.noteCount - left.noteCount;
+          }
+          return left.name.localeCompare(right.name);
+        });
       });
 
       setDayNotes(noteCounts);
@@ -111,7 +199,7 @@ export function Calendar() {
     const dateStr = new Date(currentDate.getFullYear(), currentDate.getMonth(), day)
       .toISOString()
       .split('T')[0];
-    return dayNotes[dateStr] || 0;
+    return dayNotes[dateStr] || null;
   };
 
   const isToday = (day: number) => {
@@ -191,7 +279,7 @@ export function Calendar() {
                 </div>
               ))}
               {days.map((day, index) => {
-                const noteCount = day ? getNotesForDay(day) : 0;
+                const noteSummary = day ? getNotesForDay(day) : null;
                 const today = day ? isToday(day) : false;
 
                 return (
@@ -207,10 +295,38 @@ export function Calendar() {
                         <div className={`text-sm font-medium mb-2 ${today ? 'text-blue-600 font-bold' : 'text-gray-900'}`}>
                           {day}
                         </div>
-                        {noteCount > 0 && (
-                          <div className="flex items-center gap-1 text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full w-fit">
-                            <StickyNote className="w-3 h-3" />
-                            <span className="font-semibold">{noteCount}</span>
+                        {noteSummary && noteSummary.total > 0 && (
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-1 text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full w-fit">
+                              <StickyNote className="w-3 h-3" />
+                              <span className="font-semibold">{noteSummary.total}</span>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              {noteSummary.agents.slice(0, 2).map((agent) => {
+                                const badgeStyle = buildAgentBadgeStyle(agent.key, agent.assignedColor);
+                                return (
+                                  <div
+                                    key={agent.key}
+                                    className="flex items-center justify-between gap-2 rounded-md border px-2 py-1 text-[11px] font-medium"
+                                    style={badgeStyle}
+                                  >
+                                    <span className="truncate">{agent.name}</span>
+                                    {agent.noteCount > 1 && (
+                                      <span className="shrink-0 text-[10px] font-semibold">
+                                        {agent.noteCount}
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+
+                              {noteSummary.agents.length > 2 && (
+                                <div className="text-[11px] font-medium text-gray-500">
+                                  +{noteSummary.agents.length - 2} more
+                                </div>
+                              )}
+                            </div>
                           </div>
                         )}
                       </>
