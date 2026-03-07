@@ -11,7 +11,6 @@ interface CalendarNote {
   follow_up_type: string;
   priority: string;
   completed: boolean;
-  author_name?: string | null;
 }
 
 interface Contact {
@@ -290,11 +289,6 @@ export function CalendarDayModal({ date, onClose, onScheduleMeeting }: CalendarD
                           {note.note_text}
                         </p>
                         <div className="flex items-center gap-2 mt-2">
-                          {note.author_name && (
-                            <span className="text-xs px-2 py-1 bg-blue-50 border border-blue-200 text-blue-700 rounded">
-                              {note.author_name}
-                            </span>
-                          )}
                           <span className="text-xs px-2 py-1 bg-white border border-gray-300 rounded">
                             {getFollowUpLabel(note.follow_up_type)}
                           </span>
