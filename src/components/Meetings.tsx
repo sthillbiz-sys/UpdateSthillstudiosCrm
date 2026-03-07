@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { Phone, Video, Plus, X, Calendar as CalendarIcon, Clock, Users, Trash2, ExternalLink } from 'lucide-react';
 import { QuickCall } from './QuickCall';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
+import { useEmployee } from '../lib/employee';
 
 declare global {
   interface Window {
@@ -22,6 +23,14 @@ interface Meeting {
   status: string;
   attendees: string[];
   created_at: string;
+}
+
+interface EmployeeOption {
+  id: string;
+  email: string;
+  full_name: string;
+  role: string;
+  status?: string;
 }
 
 const PRIMARY_JITSI_DOMAIN = 'meet.sthillstudios.com';
@@ -98,6 +107,29 @@ function normalizeRoomNameForDomain(roomName: string, domain: string): string {
   return cleanRoom;
 }
 
+function formatMeetingDate(dateValue: string): string {
+  if (!dateValue) {
+    return 'Date TBD';
+  }
+
+  const parsed = new Date(`${dateValue}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) {
+    return dateValue;
+  }
+
+  return parsed.toLocaleDateString();
+}
+
+function getMeetingTypeLabel(meetingType: string): string {
+  if (meetingType === 'phone') {
+    return 'Voice';
+  }
+  if (meetingType === 'in-person') {
+    return 'In person';
+  }
+  return 'Video';
+}
+
 export function Meetings() {
   const [activeTab, setActiveTab] = useState<'schedule' | 'join'>('join');
   const [showQuickCall, setShowQuickCall] = useState(false);
@@ -111,9 +143,11 @@ export function Meetings() {
   const [jitsiError, setJitsiError] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
   const [videoMuted, setVideoMuted] = useState(false);
+  const [activeMeetingType, setActiveMeetingType] = useState<'video' | 'phone'>('video');
   const jitsiContainerRef = useRef<HTMLDivElement>(null);
   const jitsiApiRef = useRef<any>(null);
   const { user } = useAuth();
+  const { isAdmin, allEmployees } = useEmployee();
 
   const [formData, setFormData] = useState({
     title: '',
@@ -124,6 +158,27 @@ export function Meetings() {
     description: '',
     attendees: '',
   });
+  const [selectedEmployeeEmails, setSelectedEmployeeEmails] = useState<string[]>([]);
+  const [instantMeetingTitle, setInstantMeetingTitle] = useState('');
+  const [instantMeetingType, setInstantMeetingType] = useState<'video' | 'phone'>('video');
+  const [instantSelectedEmployeeEmails, setInstantSelectedEmployeeEmails] = useState<string[]>([]);
+  const [startingInstantMeeting, setStartingInstantMeeting] = useState(false);
+
+  const employeeOptions = useMemo<EmployeeOption[]>(
+    () =>
+      allEmployees
+        .filter((employee) => String(employee.email || '').trim() !== '')
+        .filter((employee) => String(employee.email || '').trim().toLowerCase() !== String(user?.email || '').trim().toLowerCase())
+        .filter((employee) => String(employee.status || 'active').toLowerCase() !== 'inactive')
+        .map((employee) => ({
+          id: String(employee.id),
+          email: String(employee.email || '').trim(),
+          full_name: String(employee.full_name || employee.email || 'Employee'),
+          role: String(employee.role || 'employee'),
+          status: employee.status,
+        })),
+    [allEmployees, user?.email],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -172,29 +227,83 @@ export function Meetings() {
     }
   };
 
-  const handleScheduleMeeting = async (e: FormEvent) => {
-    e.preventDefault();
+  const toggleEmailSelection = (
+    email: string,
+    selected: string[],
+    setter: Dispatch<SetStateAction<string[]>>,
+  ) => {
+    setter((current) =>
+      current.includes(email)
+        ? current.filter((item) => item !== email)
+        : [...current, email],
+    );
+  };
 
-    const roomName = `Sthill-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-    const attendeesArray = formData.attendees
+  const buildMeetingAttendees = (selectedEmails: string[], extraEmails: string) => {
+    const manualEmails = extraEmails
       .split(',')
-      .map(email => email.trim())
-      .filter(email => email.length > 0);
+      .map((email) => email.trim())
+      .filter((email) => email.length > 0);
 
+    return Array.from(new Set([...selectedEmails, ...manualEmails]));
+  };
+
+  const createMeetingRecord = async ({
+    title,
+    meetingType,
+    duration,
+    description,
+    attendees,
+    scheduledDate,
+    scheduledTime,
+    status,
+  }: {
+    title: string;
+    meetingType: string;
+    duration: string;
+    description: string;
+    attendees: string[];
+    scheduledDate: string;
+    scheduledTime: string;
+    status: string;
+  }) => {
+    const roomName = `Sthill-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
     const { error } = await supabase.from('meetings').insert({
-      title: formData.title,
-      meeting_type: formData.meeting_type,
-      scheduled_date: formData.scheduled_date,
-      scheduled_time: formData.scheduled_time,
-      duration: formData.duration,
-      description: formData.description,
+      title,
+      meeting_type: meetingType,
+      scheduled_date: scheduledDate,
+      scheduled_time: scheduledTime,
+      duration,
+      description,
       room_name: roomName,
-      status: 'scheduled',
-      attendees: attendeesArray,
+      status,
+      attendees,
       created_by_user_id: user?.id,
     });
 
-    if (!error) {
+    if (error) {
+      throw error;
+    }
+
+    return roomName;
+  };
+
+  const handleScheduleMeeting = async (e: FormEvent) => {
+    e.preventDefault();
+
+    try {
+      const attendeesArray = buildMeetingAttendees(selectedEmployeeEmails, formData.attendees);
+      await createMeetingRecord({
+        title: formData.title,
+        meetingType: formData.meeting_type,
+        scheduledDate: formData.scheduled_date,
+        scheduledTime: formData.scheduled_time,
+        duration: formData.duration,
+        description: formData.description,
+        attendees: attendeesArray,
+        status: 'scheduled',
+      });
+
       setShowScheduleModal(false);
       setFormData({
         title: '',
@@ -205,7 +314,11 @@ export function Meetings() {
         description: '',
         attendees: '',
       });
-      fetchMeetings();
+      setSelectedEmployeeEmails([]);
+      await fetchMeetings();
+    } catch (error) {
+      console.error('Error scheduling meeting:', error);
+      alert(error instanceof Error ? error.message : 'Failed to schedule meeting.');
     }
   };
 
@@ -217,16 +330,23 @@ export function Meetings() {
     }
   };
 
-  const openQuickCallFallback = (roomName: string) => {
+  const openQuickCallFallback = (roomName: string, meetingType: 'video' | 'phone' = 'video') => {
     setSelectedRoomName(roomName.trim() || 'SthillStudiosMain');
+    setActiveMeetingType(meetingType);
     setShowQuickCall(true);
   };
 
-  const joinMeetingRoom = (roomName: string) => {
+  const joinMeetingRoom = (roomName: string, meetingType: string = 'video') => {
+    if (meetingType === 'in-person') {
+      alert('This meeting is marked as in-person and does not have an online room to join.');
+      return;
+    }
+
     const room = roomName.trim() || 'SthillStudiosMain';
     setSelectedRoomName(room);
     setRoomInput(room);
     setActiveTab('join');
+    setActiveMeetingType(meetingType === 'phone' ? 'phone' : 'video');
 
     if (jitsiLoaded) {
       setShowQuickCall(false);
@@ -234,10 +354,85 @@ export function Meetings() {
       return;
     }
 
-    openQuickCallFallback(room);
+    openQuickCallFallback(room, meetingType === 'phone' ? 'phone' : 'video');
   };
 
-  const startJitsiMeeting = (roomName: string) => {
+  const renderEmployeeSelector = (
+    selectedEmails: string[],
+    setter: Dispatch<SetStateAction<string[]>>,
+    emptyText: string,
+  ) => {
+    if (employeeOptions.length === 0) {
+      return (
+        <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-5 text-sm text-gray-500">
+          {emptyText}
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-3">
+        <div className="flex flex-wrap gap-2">
+          {selectedEmails.length === 0 && (
+            <span className="text-sm text-gray-500">No employees selected yet.</span>
+          )}
+          {selectedEmails.map((email) => {
+            const selectedEmployee = employeeOptions.find((employee) => employee.email === email);
+            return (
+              <span
+                key={email}
+                className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700"
+              >
+                {selectedEmployee?.full_name || email}
+                <button
+                  type="button"
+                  onClick={() => toggleEmailSelection(email, selectedEmails, setter)}
+                  className="text-blue-500 transition-colors hover:text-blue-700"
+                  aria-label={`Remove ${selectedEmployee?.full_name || email}`}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+
+        <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-gray-200 bg-gray-50 p-3">
+          {employeeOptions.map((employee) => {
+            const checked = selectedEmails.includes(employee.email);
+            return (
+              <label
+                key={employee.email}
+                className={`flex cursor-pointer items-center justify-between rounded-lg border px-3 py-3 transition-colors ${
+                  checked
+                    ? 'border-blue-200 bg-blue-50'
+                    : 'border-transparent bg-white hover:border-gray-200'
+                }`}
+              >
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">{employee.full_name}</p>
+                  <p className="text-xs text-gray-500">{employee.email}</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium uppercase tracking-wide text-slate-600">
+                    {employee.role}
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleEmailSelection(employee.email, selectedEmails, setter)}
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                </div>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const startJitsiMeeting = (roomName: string, meetingType: 'video' | 'phone') => {
     if (!jitsiContainerRef.current) {
       console.error('Jitsi container not found');
       return;
@@ -268,7 +463,7 @@ export function Meetings() {
         },
         configOverwrite: {
           startWithAudioMuted: false,
-          startWithVideoMuted: false,
+          startWithVideoMuted: meetingType === 'phone',
           enableLobby: false,
         },
         interfaceConfigOverwrite: {
@@ -303,9 +498,51 @@ export function Meetings() {
     }
   };
 
+  const handleStartInstantMeeting = async () => {
+    if (!isAdmin) {
+      return;
+    }
+
+    if (instantSelectedEmployeeEmails.length === 0) {
+      alert('Select at least one employee for the meeting.');
+      return;
+    }
+
+    setStartingInstantMeeting(true);
+    try {
+      const now = new Date();
+      const scheduledDate = now.toISOString().split('T')[0];
+      const scheduledTime = now.toTimeString().slice(0, 5);
+      const title =
+        instantMeetingTitle.trim() ||
+        `${instantMeetingType === 'phone' ? 'Voice' : 'Video'} meeting with team`;
+
+      const roomName = await createMeetingRecord({
+        title,
+        meetingType: instantMeetingType,
+        scheduledDate,
+        scheduledTime,
+        duration: '30 minutes',
+        description: '',
+        attendees: instantSelectedEmployeeEmails,
+        status: 'live',
+      });
+
+      await fetchMeetings();
+      setInstantMeetingTitle('');
+      setInstantSelectedEmployeeEmails([]);
+      joinMeetingRoom(roomName, instantMeetingType);
+    } catch (error) {
+      console.error('Error starting instant meeting:', error);
+      alert(error instanceof Error ? error.message : 'Failed to start meeting.');
+    } finally {
+      setStartingInstantMeeting(false);
+    }
+  };
+
   useEffect(() => {
     if (inMeeting && selectedRoomName) {
-      startJitsiMeeting(selectedRoomName);
+      startJitsiMeeting(selectedRoomName, activeMeetingType);
     }
 
     return () => {
@@ -314,7 +551,7 @@ export function Meetings() {
         jitsiApiRef.current = null;
       }
     };
-  }, [inMeeting, selectedRoomName]);
+  }, [activeMeetingType, inMeeting, selectedRoomName]);
 
   return (
     <>
@@ -385,7 +622,7 @@ export function Meetings() {
                     if (!jitsiLoaded) {
                       const room = roomInput.trim() || 'SthillStudiosMain';
                       if (jitsiError) {
-                        openQuickCallFallback(room);
+                        openQuickCallFallback(room, 'video');
                         return;
                       }
                       alert('Meeting system is still loading. Please wait a moment and try again.');
@@ -551,80 +788,278 @@ export function Meetings() {
             </div>
           )}
 
-          {activeTab === 'schedule' && meetings.length > 0 && (
-            <div>
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-xl font-bold text-slate-900">Scheduled Meetings</h3>
+          {activeTab === 'schedule' && (
+            <div className="space-y-8">
+              <div className="flex flex-col gap-4 rounded-2xl bg-white p-6 shadow-sm border border-gray-200 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-900">Meetings Hub</h3>
+                  <p className="mt-1 text-sm text-gray-600">
+                    Schedule meetings or launch a live voice/video session from this page.
+                  </p>
+                </div>
                 <button
                   onClick={() => setShowScheduleModal(true)}
-                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
                 >
                   <Plus className="w-4 h-4" />
-                  Schedule
+                  Schedule Meeting
                 </button>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {meetings.map((meeting) => (
-                  <div
-                    key={meeting.id}
-                    className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow"
-                  >
-                    <div className="flex items-start justify-between mb-4">
-                      <h3 className="text-lg font-semibold text-slate-900">{meeting.title}</h3>
-                      <button
-                        onClick={() => handleDeleteMeeting(meeting.id)}
-                        className="text-gray-400 hover:text-red-600 transition-colors"
-                      >
-                        <Trash2 className="w-5 h-5" />
-                      </button>
+
+              {isAdmin && (
+                <div className="grid gap-6 lg:grid-cols-[1.2fr,0.8fr]">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                    <div className="mb-5 flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-xl font-bold text-slate-900">Start Instant Meeting</h3>
+                        <p className="mt-1 text-sm text-gray-600">
+                          Pick employees and launch a meeting without leaving this screen.
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                        Admin only
+                      </span>
                     </div>
 
-                    <div className="space-y-3 mb-4">
-                      <div className="flex items-center gap-2 text-sm text-gray-600">
-                        <CalendarIcon className="w-4 h-4" />
-                        <span>{new Date(meeting.scheduled_date).toLocaleDateString()}</span>
+                    <div className="space-y-5">
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-gray-700">
+                          Meeting Title
+                        </label>
+                        <input
+                          type="text"
+                          value={instantMeetingTitle}
+                          onChange={(e) => setInstantMeetingTitle(e.target.value)}
+                          placeholder="e.g., Morning sales huddle"
+                          className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                        />
                       </div>
-                      <div className="flex items-center gap-2 text-sm text-gray-600">
-                        <Clock className="w-4 h-4" />
-                        <span>{meeting.scheduled_time} ({meeting.duration})</span>
-                      </div>
-                      {meeting.attendees && meeting.attendees.length > 0 && (
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <Users className="w-4 h-4" />
-                          <span>{meeting.attendees.length} attendees</span>
+
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-gray-700">
+                          Meeting Mode
+                        </label>
+                        <div className="grid grid-cols-2 gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setInstantMeetingType('video')}
+                            className={`flex items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium transition-colors ${
+                              instantMeetingType === 'video'
+                                ? 'border-blue-600 bg-blue-50 text-blue-700'
+                                : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
+                            }`}
+                          >
+                            <Video className="h-4 w-4" />
+                            Video
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setInstantMeetingType('phone')}
+                            className={`flex items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium transition-colors ${
+                              instantMeetingType === 'phone'
+                                ? 'border-blue-600 bg-blue-50 text-blue-700'
+                                : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
+                            }`}
+                          >
+                            <Phone className="h-4 w-4" />
+                            Voice
+                          </button>
                         </div>
-                      )}
+                      </div>
+
+                      <div>
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <label className="block text-sm font-medium text-gray-700">
+                            Invite Employees
+                          </label>
+                          <span className="text-xs font-medium text-gray-500">
+                            {instantSelectedEmployeeEmails.length} selected
+                          </span>
+                        </div>
+                        {renderEmployeeSelector(
+                          instantSelectedEmployeeEmails,
+                          setInstantSelectedEmployeeEmails,
+                          'No employee records with email addresses are available yet.',
+                        )}
+                      </div>
+
+                      <div className="flex flex-col gap-3 border-t border-gray-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-sm text-gray-500">
+                          {jitsiLoaded
+                            ? `Meetings are ready on ${jitsiDomain === FALLBACK_JITSI_DOMAIN ? 'the backup provider' : 'the primary provider'}.`
+                            : jitsiError
+                              ? 'Primary provider is unavailable. The backup meeting window will be used.'
+                              : 'Meeting system is still loading.'}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleStartInstantMeeting}
+                          disabled={startingInstantMeeting || instantSelectedEmployeeEmails.length === 0}
+                          className={`inline-flex items-center justify-center gap-2 rounded-lg px-5 py-3 text-sm font-semibold transition-colors ${
+                            startingInstantMeeting || instantSelectedEmployeeEmails.length === 0
+                              ? 'cursor-not-allowed bg-gray-300 text-white'
+                              : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                          }`}
+                        >
+                          {startingInstantMeeting ? (
+                            <>
+                              <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                              Starting...
+                            </>
+                          ) : instantMeetingType === 'phone' ? (
+                            <>
+                              <Phone className="h-4 w-4" />
+                              Start Voice Meeting
+                            </>
+                          ) : (
+                            <>
+                              <Video className="h-4 w-4" />
+                              Start Video Meeting
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
+                  </div>
 
-                    {meeting.description && (
-                      <p className="text-sm text-gray-600 mb-4 line-clamp-2">{meeting.description}</p>
-                    )}
+                  <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6 text-white shadow-sm">
+                    <h3 className="text-lg font-bold">Meeting Readiness</h3>
+                    <div className="mt-5 space-y-4 text-sm text-slate-200">
+                      <div className="flex items-center justify-between rounded-xl bg-white/5 px-4 py-3">
+                        <span>Video meetings</span>
+                        <span className="font-semibold text-emerald-300">Available</span>
+                      </div>
+                      <div className="flex items-center justify-between rounded-xl bg-white/5 px-4 py-3">
+                        <span>Voice meetings</span>
+                        <span className="font-semibold text-emerald-300">Available</span>
+                      </div>
+                      <div className="flex items-center justify-between rounded-xl bg-white/5 px-4 py-3">
+                        <span>Provider</span>
+                        <span className="font-semibold">
+                          {jitsiLoaded
+                            ? jitsiDomain === FALLBACK_JITSI_DOMAIN
+                              ? 'Backup'
+                              : 'Primary'
+                            : 'Loading'}
+                        </span>
+                      </div>
+                      <p className="rounded-xl border border-white/10 bg-white/5 px-4 py-4 text-slate-300">
+                        Voice meetings launch Jitsi with the camera muted by default. Video meetings start with camera controls enabled on the same page.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
 
+              <div>
+                <div className="mb-6 flex items-center justify-between">
+                  <h3 className="text-xl font-bold text-slate-900">Scheduled Meetings</h3>
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600">
+                    {meetings.length} total
+                  </span>
+                </div>
+
+                {meetings.length === 0 ? (
+                  <div className="rounded-xl border border-gray-200 bg-white p-12 text-center shadow-sm">
+                    <CalendarIcon className="mx-auto mb-4 h-16 w-16 text-gray-400" />
+                    <h3 className="mb-2 text-lg font-semibold text-gray-900">No scheduled meetings</h3>
+                    <p className="mb-4 text-gray-600">Schedule your first meeting to get started.</p>
                     <button
-                      onClick={() => joinMeetingRoom(meeting.room_name)}
-                      className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                      onClick={() => setShowScheduleModal(true)}
+                      className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-6 py-3 font-medium text-white transition-colors hover:bg-blue-700"
                     >
-                      <ExternalLink className="w-4 h-4" />
-                      Join Meeting
+                      <Plus className="h-5 w-5" />
+                      Schedule Meeting
                     </button>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
+                ) : (
+                  <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+                    {meetings.map((meeting) => (
+                      <div
+                        key={meeting.id}
+                        className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm transition-shadow hover:shadow-md"
+                      >
+                        <div className="mb-4 flex items-start justify-between gap-4">
+                          <div>
+                            <div className="mb-2 flex flex-wrap gap-2">
+                              <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-700">
+                                {getMeetingTypeLabel(meeting.meeting_type)}
+                              </span>
+                              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                                {meeting.status || 'scheduled'}
+                              </span>
+                            </div>
+                            <h3 className="text-lg font-semibold text-slate-900">{meeting.title}</h3>
+                          </div>
+                          <button
+                            onClick={() => handleDeleteMeeting(meeting.id)}
+                            className="text-gray-400 transition-colors hover:text-red-600"
+                            aria-label={`Delete ${meeting.title}`}
+                          >
+                            <Trash2 className="h-5 w-5" />
+                          </button>
+                        </div>
 
-          {activeTab === 'schedule' && meetings.length === 0 && (
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
-              <CalendarIcon className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">No scheduled meetings</h3>
-              <p className="text-gray-600 mb-4">Schedule your first meeting to get started</p>
-              <button
-                onClick={() => setShowScheduleModal(true)}
-                className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
-              >
-                <Plus className="w-5 h-5" />
-                Schedule Meeting
-              </button>
+                        <div className="mb-4 space-y-3">
+                          <div className="flex items-center gap-2 text-sm text-gray-600">
+                            <CalendarIcon className="h-4 w-4" />
+                            <span>{formatMeetingDate(meeting.scheduled_date)}</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-sm text-gray-600">
+                            <Clock className="h-4 w-4" />
+                            <span>{meeting.scheduled_time} ({meeting.duration})</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-sm text-gray-600">
+                            <Users className="h-4 w-4" />
+                            <span>
+                              {meeting.attendees && meeting.attendees.length > 0
+                                ? `${meeting.attendees.length} attendee${meeting.attendees.length === 1 ? '' : 's'}`
+                                : 'No attendees added'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {meeting.attendees && meeting.attendees.length > 0 && (
+                          <div className="mb-4 flex flex-wrap gap-2">
+                            {meeting.attendees.slice(0, 3).map((attendee) => (
+                              <span
+                                key={attendee}
+                                className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600"
+                              >
+                                {attendee}
+                              </span>
+                            ))}
+                            {meeting.attendees.length > 3 && (
+                              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+                                +{meeting.attendees.length - 3} more
+                              </span>
+                            )}
+                          </div>
+                        )}
+
+                        {meeting.description && (
+                          <p className="mb-4 line-clamp-2 text-sm text-gray-600">{meeting.description}</p>
+                        )}
+
+                        <button
+                          onClick={() => joinMeetingRoom(meeting.room_name, meeting.meeting_type)}
+                          disabled={meeting.meeting_type === 'in-person'}
+                          className={`w-full flex items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium transition-colors ${
+                            meeting.meeting_type === 'in-person'
+                              ? 'cursor-not-allowed bg-gray-200 text-gray-500'
+                              : 'bg-blue-600 text-white hover:bg-blue-700'
+                          }`}
+                        >
+                          <ExternalLink className="h-4 w-4" />
+                          {meeting.meeting_type === 'in-person'
+                            ? 'In-Person Meeting'
+                            : `Join ${getMeetingTypeLabel(meeting.meeting_type)}`}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -722,7 +1157,18 @@ export function Meetings() {
 
                 <div className="md:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Attendees
+                    Employee Attendees
+                  </label>
+                  {renderEmployeeSelector(
+                    selectedEmployeeEmails,
+                    setSelectedEmployeeEmails,
+                    'No employee records with email addresses are available yet.',
+                  )}
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Additional Attendee Emails
                   </label>
                   <input
                     type="text"
@@ -774,6 +1220,7 @@ export function Meetings() {
             setShowQuickCall(false);
             setSelectedRoomName('SthillStudiosMain');
           }}
+          meetingType={activeMeetingType}
           roomName={selectedRoomName}
         />
       )}

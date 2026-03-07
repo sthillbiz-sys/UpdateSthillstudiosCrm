@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 interface QuickCallProps {
   onClose: () => void;
   roomName?: string;
+  meetingType?: 'video' | 'phone';
 }
 
 declare global {
@@ -12,7 +13,11 @@ declare global {
   }
 }
 
-export function QuickCall({ onClose, roomName = 'SthillStudiosMain' }: QuickCallProps) {
+export function QuickCall({
+  onClose,
+  roomName = 'SthillStudiosMain',
+  meetingType = 'video',
+}: QuickCallProps) {
   const jitsiContainerRef = useRef<HTMLDivElement>(null);
   const jitsiRef = useRef<any>(null);
 
@@ -39,7 +44,10 @@ export function QuickCall({ onClose, roomName = 'SthillStudiosMain' }: QuickCall
         width: 900,
         height: 600,
         parentNode: jitsiContainerRef.current,
-        configOverwrite: { startWithAudioMuted: true },
+        configOverwrite: {
+          startWithAudioMuted: false,
+          startWithVideoMuted: meetingType === 'phone',
+        },
         interfaceConfigOverwrite: { filmStripOnly: false }
       };
 
@@ -54,7 +62,7 @@ export function QuickCall({ onClose, roomName = 'SthillStudiosMain' }: QuickCall
         jitsiRef.current = null;
       }
     };
-  }, [onClose, roomName]);
+  }, [meetingType, onClose, roomName]);
 
   return (
     <div className="fixed inset-0 z-50 bg-black bg-opacity-80 flex items-center justify-center p-4">
