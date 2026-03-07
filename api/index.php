@@ -1478,7 +1478,6 @@ try {
         $sql = 'SELECT
                     cn.*,
                     COALESCE(NULLIF(TRIM(e.name), \'\'), NULLIF(TRIM(u.name), \'\'), NULLIF(TRIM(u.email), \'\'), \'Team Member\') AS author_name,
-                    COALESCE(NULLIF(TRIM(e.assigned_color), \'\'), NULL) AS author_assigned_color,
                     u.email AS author_email,
                     u.role AS author_role
                 FROM calendar_notes cn
