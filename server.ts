@@ -742,6 +742,7 @@ async function startServer() {
           scheduledDate: typeof message.scheduledDate === "string" ? message.scheduledDate : "",
           scheduledTime: typeof message.scheduledTime === "string" ? message.scheduledTime : "",
           senderName: sender.name,
+          attendees,
           timestamp: new Date().toISOString(),
         });
 

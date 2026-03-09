@@ -131,6 +131,7 @@ export function CRM() {
             scheduledDate?: string;
             scheduledTime?: string;
             senderName?: string;
+            attendees?: string[];
           };
 
           if (payload.type === 'help-alert' && isAdmin) {
@@ -147,6 +148,15 @@ export function CRM() {
           }
 
           if (payload.type === 'meeting-invite-alert') {
+            const attendees = Array.isArray(payload.attendees)
+              ? payload.attendees.map((attendee) => String(attendee || '').trim().toLowerCase()).filter(Boolean)
+              : [];
+            const currentUserEmail = String(user.email || '').trim().toLowerCase();
+
+            if (!currentUserEmail || attendees.length === 0 || !attendees.includes(currentUserEmail)) {
+              return;
+            }
+
             window.dispatchEvent(new CustomEvent('meetingInvite', {
               detail: {
                 id: String(payload.meetingId || `${payload.roomName || 'meeting'}-${payload.timestamp || Date.now()}`),
@@ -158,6 +168,7 @@ export function CRM() {
                 scheduledDate: payload.scheduledDate || '',
                 scheduledTime: payload.scheduledTime || '',
                 senderName: payload.senderName || 'Team',
+                attendees,
                 timestamp: payload.timestamp || new Date().toISOString(),
               },
             }));

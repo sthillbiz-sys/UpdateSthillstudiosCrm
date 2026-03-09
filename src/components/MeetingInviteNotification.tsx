@@ -13,6 +13,7 @@ type MeetingInvite = {
   scheduledDate: string;
   scheduledTime: string;
   senderName: string;
+  attendees: string[];
   timestamp: string;
 };
 
@@ -21,6 +22,7 @@ type Props = {
 };
 
 const SEEN_INVITES_STORAGE_KEY = 'crm_seen_meeting_invites';
+const ACTIVE_INVITES_STORAGE_KEY = 'crm_active_meeting_invites';
 const PENDING_INVITE_STORAGE_KEY = 'crm_pending_meeting_invite';
 
 function normalizeInviteEmail(value: string | null | undefined): string {
@@ -50,6 +52,49 @@ function writeSeenInvites(ids: string[]): void {
     return;
   }
   localStorage.setItem(SEEN_INVITES_STORAGE_KEY, JSON.stringify(ids.slice(-50)));
+}
+
+function readActiveInvites(): MeetingInvite[] {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  try {
+    const raw = localStorage.getItem(ACTIVE_INVITES_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeActiveInvites(invites: MeetingInvite[]): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  localStorage.setItem(ACTIVE_INVITES_STORAGE_KEY, JSON.stringify(invites.slice(0, 20)));
+}
+
+function buildInviteId(invite: Pick<MeetingInvite, 'meetingId' | 'roomName' | 'scheduledDate' | 'scheduledTime'>): string {
+  if (invite.meetingId !== undefined && invite.meetingId !== null && String(invite.meetingId).trim() !== '') {
+    return `meeting:${String(invite.meetingId).trim()}`;
+  }
+
+  return `room:${String(invite.roomName || 'SthillStudiosMain').trim().toLowerCase()}|${String(invite.scheduledDate || '').trim()}|${String(invite.scheduledTime || '').trim()}`;
+}
+
+function normalizeInvite(invite: MeetingInvite): MeetingInvite {
+  return {
+    ...invite,
+    attendees: Array.isArray(invite.attendees)
+      ? invite.attendees.map((attendee) => normalizeInviteEmail(attendee)).filter(Boolean)
+      : [],
+    id: buildInviteId(invite),
+  };
+}
+
+function isInviteForUser(invite: MeetingInvite, currentUserEmail: string): boolean {
+  return invite.attendees.some((attendee) => normalizeInviteEmail(attendee) === currentUserEmail);
 }
 
 function persistPendingInvite(invite: MeetingInvite): void {
@@ -84,17 +129,35 @@ export function MeetingInviteNotification({ onJoinMeeting }: Props) {
     }
 
     const seen = new Set(readSeenInvites());
+    const storedInvites = readActiveInvites()
+      .map((invite) => normalizeInvite(invite as MeetingInvite))
+      .filter((invite) => !seen.has(invite.id))
+      .filter((invite) => isInviteForUser(invite, currentUserEmail));
 
-    const pushInvite = (invite: MeetingInvite) => {
-      if (!invite.id || seen.has(invite.id)) {
+    setInvites(storedInvites);
+
+    const persistInviteList = (nextInvites: MeetingInvite[]) => {
+      const latestSeen = new Set(readSeenInvites());
+      const activeInvites = readActiveInvites()
+        .map((invite) => normalizeInvite(invite as MeetingInvite))
+        .filter((invite) => !nextInvites.some((item) => item.id === invite.id))
+        .filter((invite) => !latestSeen.has(invite.id));
+
+      writeActiveInvites([...nextInvites, ...activeInvites]);
+    };
+
+    const pushInvite = (incomingInvite: MeetingInvite) => {
+      const invite = normalizeInvite(incomingInvite);
+      const latestSeen = new Set(readSeenInvites());
+      if (!invite.id || latestSeen.has(invite.id) || !isInviteForUser(invite, currentUserEmail)) {
         return;
       }
 
       setInvites((current) => {
-        if (current.some((item) => item.id === invite.id)) {
-          return current;
-        }
-        return [invite, ...current].slice(0, 3);
+        const withoutCurrentInvite = current.filter((item) => item.id !== invite.id);
+        const nextInvites = [invite, ...withoutCurrentInvite].slice(0, 3);
+        persistInviteList(nextInvites);
+        return nextInvites;
       });
     };
 
@@ -124,6 +187,10 @@ export function MeetingInviteNotification({ onJoinMeeting }: Props) {
           })
           .slice(0, 3)
           .forEach((meeting: any) => {
+            const attendees = Array.isArray(meeting?.attendees)
+              ? meeting.attendees.map((attendee: string) => normalizeInviteEmail(attendee)).filter(Boolean)
+              : [];
+
             pushInvite({
               id: String(meeting?.id || meeting?.room_name || `meeting-${Date.now()}`),
               meetingId: meeting?.id ?? null,
@@ -134,6 +201,7 @@ export function MeetingInviteNotification({ onJoinMeeting }: Props) {
               scheduledDate: String(meeting?.scheduled_date || ''),
               scheduledTime: String(meeting?.scheduled_time || ''),
               senderName: 'Team',
+              attendees,
               timestamp: String(meeting?.created_at || new Date().toISOString()),
             });
           });
@@ -158,7 +226,11 @@ export function MeetingInviteNotification({ onJoinMeeting }: Props) {
   const dismissInvite = (inviteId: string) => {
     const nextSeen = [...readSeenInvites(), inviteId];
     writeSeenInvites(nextSeen);
-    setInvites((current) => current.filter((invite) => invite.id !== inviteId));
+    setInvites((current) => {
+      const nextInvites = current.filter((invite) => invite.id !== inviteId);
+      writeActiveInvites(readActiveInvites().map((invite) => normalizeInvite(invite as MeetingInvite)).filter((invite) => invite.id !== inviteId));
+      return nextInvites;
+    });
   };
 
   const handleJoin = (invite: MeetingInvite) => {
