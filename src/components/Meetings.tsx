@@ -163,6 +163,9 @@ export function Meetings() {
   const [instantMeetingType, setInstantMeetingType] = useState<'video' | 'phone'>('video');
   const [instantSelectedEmployeeEmails, setInstantSelectedEmployeeEmails] = useState<string[]>([]);
   const [startingInstantMeeting, setStartingInstantMeeting] = useState(false);
+  const [joinMeetingTitle, setJoinMeetingTitle] = useState('');
+  const [joinSelectedEmployeeEmails, setJoinSelectedEmployeeEmails] = useState<string[]>([]);
+  const [startingJoinMeeting, setStartingJoinMeeting] = useState(false);
 
   const employeeOptions = useMemo<EmployeeOption[]>(
     () =>
@@ -257,6 +260,7 @@ export function Meetings() {
     scheduledDate,
     scheduledTime,
     status,
+    roomName,
   }: {
     title: string;
     meetingType: string;
@@ -266,8 +270,10 @@ export function Meetings() {
     scheduledDate: string;
     scheduledTime: string;
     status: string;
+    roomName?: string;
   }) => {
-    const roomName = `Sthill-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    const resolvedRoomName =
+      roomName?.trim() || `Sthill-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
     const { error } = await supabase.from('meetings').insert({
       title,
       meeting_type: meetingType,
@@ -275,7 +281,7 @@ export function Meetings() {
       scheduled_time: scheduledTime,
       duration,
       description,
-      room_name: roomName,
+      room_name: resolvedRoomName,
       status,
       attendees,
       created_by_user_id: user?.id,
@@ -285,7 +291,27 @@ export function Meetings() {
       throw error;
     }
 
-    return roomName;
+    return resolvedRoomName;
+  };
+
+  const buildSelectedEmployeeTitle = (selectedEmails: string[], fallbackTitle: string) => {
+    if (selectedEmails.length === 0) {
+      return fallbackTitle;
+    }
+
+    const selectedNames = selectedEmails
+      .map((email) => employeeOptions.find((employee) => employee.email === email)?.full_name || email)
+      .filter(Boolean);
+
+    if (selectedNames.length === 1) {
+      return `Meeting with ${selectedNames[0]}`;
+    }
+
+    if (selectedNames.length === 2) {
+      return `Meeting with ${selectedNames[0]} and ${selectedNames[1]}`;
+    }
+
+    return `Meeting with ${selectedNames.length} team members`;
   };
 
   const handleScheduleMeeting = async (e: FormEvent) => {
@@ -540,6 +566,61 @@ export function Meetings() {
     }
   };
 
+  const handleJoinMeeting = async () => {
+    if (!jitsiLoaded) {
+      const fallbackRoom = roomInput.trim() || 'SthillStudiosMain';
+      if (jitsiError) {
+        openQuickCallFallback(fallbackRoom, 'video');
+        return;
+      }
+      alert('Meeting system is still loading. Please wait a moment and try again.');
+      return;
+    }
+
+    if (!isAdmin || joinSelectedEmployeeEmails.length === 0) {
+      const room = roomInput.trim() || 'SthillStudiosMain';
+      setSelectedRoomName(room);
+      setInMeeting(true);
+      return;
+    }
+
+    setStartingJoinMeeting(true);
+    try {
+      const now = new Date();
+      const scheduledDate = now.toISOString().split('T')[0];
+      const scheduledTime = now.toTimeString().slice(0, 5);
+      const title =
+        joinMeetingTitle.trim() ||
+        buildSelectedEmployeeTitle(joinSelectedEmployeeEmails, 'Live team meeting');
+      const preferredRoomName = roomInput.trim();
+
+      const roomName = await createMeetingRecord({
+        title,
+        meetingType: 'video',
+        scheduledDate,
+        scheduledTime,
+        duration: '30 minutes',
+        description: '',
+        attendees: joinSelectedEmployeeEmails,
+        status: 'live',
+        roomName: preferredRoomName,
+      });
+
+      await fetchMeetings();
+      setJoinMeetingTitle('');
+      setJoinSelectedEmployeeEmails([]);
+      setRoomInput(roomName);
+      setSelectedRoomName(roomName);
+      setActiveMeetingType('video');
+      setInMeeting(true);
+    } catch (error) {
+      console.error('Error starting join-tab meeting:', error);
+      alert(error instanceof Error ? error.message : 'Failed to start meeting.');
+    } finally {
+      setStartingJoinMeeting(false);
+    }
+  };
+
   useEffect(() => {
     if (inMeeting && selectedRoomName) {
       startJitsiMeeting(selectedRoomName, activeMeetingType);
@@ -609,54 +690,93 @@ export function Meetings() {
               )}
 
               <div className="max-w-md mx-auto space-y-6">
+                {isAdmin && (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-left">
+                    <div className="mb-4 flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold uppercase tracking-wide text-blue-200">
+                          Admin Invite
+                        </p>
+                        <p className="mt-1 text-sm text-gray-300">
+                          Select employees here to start a live meeting directly from this tab.
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-blue-500/15 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-100">
+                        {joinSelectedEmployeeEmails.length} selected
+                      </span>
+                    </div>
+
+                    <div className="mb-4">
+                      <label className="mb-2 block text-sm font-medium text-gray-200">
+                        Meeting Title
+                      </label>
+                      <input
+                        type="text"
+                        value={joinMeetingTitle}
+                        onChange={(e) => setJoinMeetingTitle(e.target.value)}
+                        placeholder="e.g., Quick coaching session"
+                        className="w-full rounded-lg border border-white/10 bg-gray-800 px-4 py-3 text-white placeholder-gray-400 focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+
+                    {renderEmployeeSelector(
+                      joinSelectedEmployeeEmails,
+                      setJoinSelectedEmployeeEmails,
+                      'No employee records with email addresses are available yet.',
+                    )}
+                  </div>
+                )}
+
                 <input
                   type="text"
                   value={roomInput}
                   onChange={(e) => setRoomInput(e.target.value)}
-                  placeholder="Enter room name or leave blank for main room"
+                  placeholder={
+                    isAdmin && joinSelectedEmployeeEmails.length > 0
+                      ? 'Optional private room name. Leave blank to generate one.'
+                      : 'Enter room name or leave blank for main room'
+                  }
                   className="w-full px-6 py-4 bg-gray-700 text-white placeholder-gray-400 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-lg"
                 />
 
                 <button
                   onClick={() => {
-                    if (!jitsiLoaded) {
-                      const room = roomInput.trim() || 'SthillStudiosMain';
-                      if (jitsiError) {
-                        openQuickCallFallback(room, 'video');
-                        return;
-                      }
-                      alert('Meeting system is still loading. Please wait a moment and try again.');
-                      return;
-                    }
-                    const room = roomInput.trim() || 'SthillStudiosMain';
-                    setSelectedRoomName(room);
-                    setInMeeting(true);
+                    void handleJoinMeeting();
                   }}
-                  disabled={!jitsiLoaded && !jitsiError}
+                  disabled={startingJoinMeeting || (!jitsiLoaded && !jitsiError)}
                   className={`w-full px-6 py-4 rounded-lg font-semibold text-lg transition-colors shadow-lg flex items-center justify-center gap-3 ${
-                    !jitsiLoaded && !jitsiError
+                    startingJoinMeeting || (!jitsiLoaded && !jitsiError)
                       ? 'bg-gray-400 cursor-not-allowed text-white'
                       : 'bg-blue-600 hover:bg-blue-700 text-white'
                   }`}
                 >
-                  {!jitsiLoaded && !jitsiError ? (
+                  {startingJoinMeeting ? (
+                    <>
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      Starting meeting...
+                    </>
+                  ) : !jitsiLoaded && !jitsiError ? (
                     <>
                       <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                       Loading meeting system...
                     </>
                   ) : jitsiError ? (
                     <>
-                      Join meeting (Fallback mode)
+                      {isAdmin && joinSelectedEmployeeEmails.length > 0
+                        ? 'Start meeting (Fallback mode)'
+                        : 'Join meeting (Fallback mode)'}
                       <Video className="w-6 h-6" />
                     </>
                   ) : jitsiDomain === FALLBACK_JITSI_DOMAIN ? (
                     <>
-                      Join meeting (Backup provider)
+                      {isAdmin && joinSelectedEmployeeEmails.length > 0
+                        ? 'Start meeting (Backup provider)'
+                        : 'Join meeting (Backup provider)'}
                       <Video className="w-6 h-6" />
                     </>
                   ) : (
                     <>
-                      Join meeting
+                      {isAdmin && joinSelectedEmployeeEmails.length > 0 ? 'Start meeting' : 'Join meeting'}
                       <Video className="w-6 h-6" />
                     </>
                   )}
