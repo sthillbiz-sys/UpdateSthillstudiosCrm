@@ -205,9 +205,29 @@ export function apiPost<T = any>(path: string, body?: unknown, isFormData = fals
   });
 }
 
-export async function uploadLeadImportFile<T = { count?: number; success?: boolean }>(file: File): Promise<T> {
+type LeadImportOptions = {
+  file?: File | null;
+  rawText?: string;
+  assignToUserId?: string | number | null;
+  sourceName?: string;
+};
+
+export async function uploadLeadImportFile<T = { count?: number; success?: boolean }>(
+  options: LeadImportOptions,
+): Promise<T> {
   const formData = new FormData();
-  formData.append('file', file);
+  if (options.file) {
+    formData.append('file', options.file);
+  }
+  if (options.rawText && options.rawText.trim() !== '') {
+    formData.append('raw_text', options.rawText);
+  }
+  if (options.sourceName && options.sourceName.trim() !== '') {
+    formData.append('source_name', options.sourceName);
+  }
+  if (options.assignToUserId !== undefined && options.assignToUserId !== null && String(options.assignToUserId).trim() !== '') {
+    formData.append('assign_to_user_id', String(options.assignToUserId));
+  }
 
   const token = getStoredToken();
   const preferredBases = Array.from(
@@ -242,7 +262,8 @@ export async function uploadLeadImportFile<T = { count?: number; success?: boole
       const message = typeof payload?.error === 'string' ? payload.error : `Request failed (${response.status})`;
       if (
         message.toLowerCase().includes('unsupported file type on php deployment') ||
-        message.toLowerCase().includes('please upload csv')
+        message.toLowerCase().includes('please upload csv') ||
+        (options.rawText && message.toLowerCase().includes('no file uploaded'))
       ) {
         lastError = new Error(message);
         continue;

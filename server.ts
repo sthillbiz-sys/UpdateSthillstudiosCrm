@@ -469,6 +469,11 @@ function dedupeImportedLeads(leads: ImportedLeadRow[]): ImportedLeadRow[] {
   return unique;
 }
 
+function resolveLeadImportSourceName(rawSourceName: unknown, fallbackName: string): string {
+  const sourceName = String(rawSourceName || "").trim();
+  return sourceName || fallbackName;
+}
+
 function toSafeUser(user: UserSafeRow): AuthTokenPayload {
   return {
     id: user.id,
@@ -1144,28 +1149,36 @@ async function startServer() {
         return;
       }
 
-      if (!req.file) {
-        res.status(400).json({ error: "No file uploaded" });
+      const requestedAssignmentRaw = String(req.body?.assign_to_user_id ?? "").trim();
+      const requestedAssignment = requestedAssignmentRaw !== "" ? Number(requestedAssignmentRaw) : null;
+      if (requestedAssignmentRaw !== "" && (!Number.isInteger(requestedAssignment) || requestedAssignment <= 0)) {
+        res.status(400).json({ error: "Invalid assign_to_user_id" });
         return;
       }
 
-      const fileName = req.file.originalname;
-      const extension = path.extname(fileName).toLowerCase();
+      const rawText = String(req.body?.raw_text ?? "").trim();
+      const sourceName = resolveLeadImportSourceName(
+        req.body?.source_name,
+        req.file?.originalname || "BamLead drag import",
+      );
+      const extension = path.extname(sourceName).toLowerCase();
       let leadsData: ImportedLeadRow[] = [];
 
-      if (extension === ".xlsx" || extension === ".xls") {
+      if (req.file && (extension === ".xlsx" || extension === ".xls")) {
         leadsData = extractLeadsFromWorkbook(req.file.buffer);
-      } else if (extension === ".pdf") {
+      } else if (req.file && extension === ".pdf") {
         const data = await (pdf as unknown as (buffer: Buffer) => Promise<{ text: string }>)(req.file.buffer);
         leadsData = extractLeadsFromPdfText(data.text);
+      } else if (!req.file && rawText !== "") {
+        leadsData = extractLeadsFromPdfText(rawText);
       } else {
-        res.status(400).json({ error: "Unsupported file type. Upload a BamLead Excel or PDF file." });
+        res.status(400).json({ error: "Unsupported import. Drop BamLead leads text or upload a BamLead Excel/PDF file." });
         return;
       }
 
       const uniqueLeads = dedupeImportedLeads(leadsData);
       if (uniqueLeads.length === 0) {
-        res.status(400).json({ error: "No leads were detected in this file. Use a BamLead Excel or PDF export." });
+        res.status(400).json({ error: "No leads were detected. Use a BamLead drag payload or a BamLead Excel/PDF export." });
         return;
       }
 
@@ -1174,8 +1187,8 @@ async function startServer() {
           name: lead.name || "Unknown",
           email: lead.email || "",
           phone: lead.phone || "",
-          source: fileName,
-          created_by_user_id: req.user?.id || null,
+          source: sourceName,
+          created_by_user_id: requestedAssignment,
         }));
 
         if (rows.length > 0) {
