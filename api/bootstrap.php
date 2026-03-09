@@ -1129,10 +1129,14 @@ function telnyx_configured_caller_numbers(): array {
     return $normalized;
 }
 
-function telnyx_http_post_json(string $url, string $apiKey, array $payload): array {
-    $body = json_encode($payload, JSON_UNESCAPED_SLASHES);
-    if (!is_string($body)) {
-        throw new RuntimeException('Failed to encode Telnyx payload.');
+function telnyx_http_post_json(string $url, string $apiKey, ?array $payload = null): array {
+    $body = '';
+    if ($payload !== null) {
+        $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES);
+        if (!is_string($encoded)) {
+            throw new RuntimeException('Failed to encode Telnyx payload.');
+        }
+        $body = $encoded;
     }
 
     $headers = [
@@ -1150,7 +1154,9 @@ function telnyx_http_post_json(string $url, string $apiKey, array $payload): arr
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        if ($body !== '') {
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        }
         curl_setopt($ch, CURLOPT_TIMEOUT, 20);
 
         $responseBody = curl_exec($ch);
@@ -1172,11 +1178,15 @@ function telnyx_http_post_json(string $url, string $apiKey, array $payload): arr
         'http' => [
             'method' => 'POST',
             'header' => implode("\r\n", $headers),
-            'content' => $body,
             'timeout' => 20,
             'ignore_errors' => true,
         ],
     ]);
+    if ($body !== '') {
+        $options = stream_context_get_options($context);
+        $options['http']['content'] = $body;
+        $context = stream_context_create($options);
+    }
 
     $responseBody = @file_get_contents($url, false, $context);
     $status = 0;
@@ -1214,13 +1224,8 @@ function telnyx_issue_access_token(): array {
         throw new RuntimeException('Telnyx configuration is incomplete.');
     }
 
-    $expiresAtUnix = time() + telnyx_access_token_ttl_seconds();
-    $expiresAtIso = gmdate('c', $expiresAtUnix);
-
     $url = telnyx_api_base_url() . '/telephony_credentials/' . rawurlencode($credentialId) . '/token';
-    $response = telnyx_http_post_json($url, $apiKey, [
-        'expires_at' => $expiresAtIso,
-    ]);
+    $response = telnyx_http_post_json($url, $apiKey);
 
     $status = (int) ($response['status'] ?? 0);
     $body = (string) ($response['body'] ?? '');
@@ -1247,7 +1252,7 @@ function telnyx_issue_access_token(): array {
     }
 
     $tokenExp = telnyx_decode_jwt_exp($token);
-    $effectiveExp = $tokenExp !== null ? $tokenExp : $expiresAtUnix;
+    $effectiveExp = $tokenExp !== null ? $tokenExp : (time() + telnyx_access_token_ttl_seconds());
 
     return [
         'token' => $token,
