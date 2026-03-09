@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
-import { Phone, Video, Plus, X, Calendar as CalendarIcon, Clock, Users, Trash2, ExternalLink } from 'lucide-react';
+import { Phone, Video, Plus, Sparkles, X, Calendar as CalendarIcon, Clock, Users, Trash2, ExternalLink } from 'lucide-react';
 import { QuickCall } from './QuickCall';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
@@ -144,6 +144,7 @@ export function Meetings() {
   const [jitsiError, setJitsiError] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
   const [videoMuted, setVideoMuted] = useState(false);
+  const [backgroundBlurred, setBackgroundBlurred] = useState(false);
   const [activeMeetingType, setActiveMeetingType] = useState<'video' | 'phone'>('video');
   const jitsiContainerRef = useRef<HTMLDivElement>(null);
   const jitsiApiRef = useRef<any>(null);
@@ -548,6 +549,7 @@ export function Meetings() {
         setInMeeting(false);
         setAudioMuted(false);
         setVideoMuted(false);
+        setBackgroundBlurred(false);
         if (jitsiApiRef.current) {
           jitsiApiRef.current.dispose();
           jitsiApiRef.current = null;
@@ -565,6 +567,21 @@ export function Meetings() {
       console.error('Error starting Jitsi meeting:', error);
       alert('Failed to start meeting. Please try again.');
       setInMeeting(false);
+    }
+  };
+
+  const toggleBlurBackground = () => {
+    if (!jitsiApiRef.current) {
+      return;
+    }
+
+    try {
+      const nextBlurred = !backgroundBlurred;
+      jitsiApiRef.current.executeCommand('setBlurredBackground', nextBlurred ? 'blur' : '');
+      setBackgroundBlurred(nextBlurred);
+    } catch (error) {
+      console.error('Error toggling blur background:', error);
+      alert('Background blur is not available on this meeting server or browser.');
     }
   };
 
@@ -687,6 +704,7 @@ export function Meetings() {
         jitsiApiRef.current.dispose();
         jitsiApiRef.current = null;
       }
+      setBackgroundBlurred(false);
     };
   }, [activeMeetingType, inMeeting, selectedRoomName]);
 
@@ -874,6 +892,17 @@ export function Meetings() {
                     </div>
                   </button>
                   <button
+                    onClick={toggleBlurBackground}
+                    className="flex flex-col items-center gap-2 text-gray-300 hover:text-white transition-colors"
+                    title="Toggle Background Blur"
+                  >
+                    <div className={`w-12 h-12 rounded-lg flex items-center justify-center transition-colors ${
+                      backgroundBlurred ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-700 hover:bg-gray-600'
+                    }`}>
+                      <Sparkles className="w-5 h-5" />
+                    </div>
+                  </button>
+                  <button
                     onClick={() => {
                       if (jitsiApiRef.current) {
                         jitsiApiRef.current.executeCommand('toggleTileView');
@@ -910,6 +939,7 @@ export function Meetings() {
                       setInMeeting(false);
                       setAudioMuted(false);
                       setVideoMuted(false);
+                      setBackgroundBlurred(false);
                     }}
                     className="flex flex-col items-center gap-2 text-white hover:text-red-200 transition-colors"
                     title="Leave Meeting"
