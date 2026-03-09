@@ -1922,6 +1922,10 @@ try {
     }
 
     if ($route === 'leads/upload' && $method === 'POST') {
+        if (!str_contains($authRole, 'admin')) {
+            json_response(['error' => 'Only administrators can import leads'], 403);
+        }
+
         if (!isset($_FILES['file']) || !is_array($_FILES['file'])) {
             json_response(['error' => 'No file uploaded'], 400);
         }

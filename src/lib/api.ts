@@ -205,6 +205,58 @@ export function apiPost<T = any>(path: string, body?: unknown, isFormData = fals
   });
 }
 
+export async function uploadLeadImportFile<T = { count?: number; success?: boolean }>(file: File): Promise<T> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const token = getStoredToken();
+  const preferredBases = Array.from(
+    new Set([API_BASE_PREFIX, API_BASE_FALLBACK, resolvedApiBase, ...API_BASE_CANDIDATES]),
+  );
+
+  let lastError: Error | null = null;
+
+  for (const apiBase of preferredBases) {
+    try {
+      const headers = new Headers();
+      if (token) {
+        headers.set('Authorization', `Bearer ${token}`);
+      }
+
+      const response = await fetch(buildApiUrl(apiBase, '/leads/upload'), {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+
+      if (isInvalidApiResponse(response)) {
+        continue;
+      }
+
+      const payload = await parseResponseJsonSafe(response);
+      if (response.ok) {
+        resolvedApiBase = apiBase;
+        return payload as T;
+      }
+
+      const message = typeof payload?.error === 'string' ? payload.error : `Request failed (${response.status})`;
+      if (
+        message.toLowerCase().includes('unsupported file type on php deployment') ||
+        message.toLowerCase().includes('please upload csv')
+      ) {
+        lastError = new Error(message);
+        continue;
+      }
+
+      throw new Error(message);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('Failed to upload lead file');
+    }
+  }
+
+  throw lastError || new Error('Failed to upload lead file');
+}
+
 export function apiPut<T = any>(path: string, body?: unknown): Promise<T> {
   return apiJson<T>(path, {
     method: 'PUT',

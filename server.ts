@@ -83,6 +83,392 @@ type UserSafeRow = {
 
 const upload = multer({ storage: multer.memoryStorage() });
 
+type ImportedLeadRow = {
+  name: string;
+  email: string;
+  phone: string;
+};
+
+const XLSX_NAME_HEADERS = new Set([
+  "name",
+  "business",
+  "businessname",
+  "company",
+  "companyname",
+  "contactname",
+  "business_name",
+]);
+
+const XLSX_EMAIL_HEADERS = new Set([
+  "email",
+  "emails",
+  "emailaddress",
+  "primaryemail",
+  "contactemail",
+]);
+
+const XLSX_PHONE_HEADERS = new Set([
+  "phone",
+  "phones",
+  "phonenumber",
+  "primaryphone",
+  "contactphone",
+  "mobile",
+  "telephone",
+]);
+
+const XLSX_LEADISH_HEADERS = new Set([
+  ...XLSX_NAME_HEADERS,
+  ...XLSX_EMAIL_HEADERS,
+  ...XLSX_PHONE_HEADERS,
+  "address",
+  "website",
+  "url",
+  "rating",
+  "platform",
+  "score",
+]);
+
+const PDF_NOISE_PREFIXES = [
+  "lead report",
+  "verified leads report",
+  "bamlead intelligence report",
+  "lead summary",
+  "generated:",
+  "total leads:",
+  "valid emails:",
+  "avg lead score:",
+  "page ",
+  "status:",
+  "platform:",
+  "mobile score:",
+  "issues:",
+  "needs upgrade",
+  "good website",
+  "business name",
+  "business phone email score",
+  "phone email score",
+];
+
+function normalizeHeader(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function normalizeCellValue(value: unknown): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeCellValue(item)).filter(Boolean).join("; ");
+  }
+  return String(value).trim();
+}
+
+function pickFirstEmail(value: string): string {
+  const matches = value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi);
+  return matches?.[0]?.trim() || "";
+}
+
+function pickFirstPhone(value: string): string {
+  const matches = value.match(/(?:\+?\d[\d().\-\s]{6,}\d)/g);
+  return matches?.[0]?.replace(/\s+/g, " ").trim() || "";
+}
+
+function sanitizeLeadName(value: string): string {
+  return value
+    .replace(/^\d+\.\s*/, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function hasMeaningfulLeadData(lead: ImportedLeadRow): boolean {
+  return lead.name !== "" || lead.email !== "" || lead.phone !== "";
+}
+
+function isLikelyNoiseLine(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  return PDF_NOISE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+function extractLeadFromRecord(record: Record<string, unknown>): ImportedLeadRow | null {
+  let name = "";
+  let email = "";
+  let phone = "";
+
+  for (const [rawKey, rawValue] of Object.entries(record)) {
+    const key = normalizeHeader(rawKey);
+    const value = normalizeCellValue(rawValue);
+    if (!value) {
+      continue;
+    }
+
+    if (!name && XLSX_NAME_HEADERS.has(key)) {
+      name = sanitizeLeadName(value);
+      continue;
+    }
+
+    if (!email && XLSX_EMAIL_HEADERS.has(key)) {
+      email = pickFirstEmail(value);
+      continue;
+    }
+
+    if (!phone && XLSX_PHONE_HEADERS.has(key)) {
+      phone = pickFirstPhone(value);
+    }
+  }
+
+  if (!email) {
+    for (const rawValue of Object.values(record)) {
+      email = pickFirstEmail(normalizeCellValue(rawValue));
+      if (email) {
+        break;
+      }
+    }
+  }
+
+  if (!phone) {
+    for (const rawValue of Object.values(record)) {
+      phone = pickFirstPhone(normalizeCellValue(rawValue));
+      if (phone) {
+        break;
+      }
+    }
+  }
+
+  if (!name) {
+    const fallbackKeys = ["website", "url"];
+    for (const [rawKey, rawValue] of Object.entries(record)) {
+      const key = normalizeHeader(rawKey);
+      if (!fallbackKeys.includes(key)) {
+        continue;
+      }
+      const value = normalizeCellValue(rawValue);
+      if (value) {
+        name = value.replace(/^https?:\/\//i, "").replace(/\/.*$/, "").trim();
+        if (name) {
+          break;
+        }
+      }
+    }
+  }
+
+  const lead = {
+    name,
+    email,
+    phone,
+  };
+
+  if (!hasMeaningfulLeadData(lead)) {
+    return null;
+  }
+
+  if (normalizeHeader(name) === "field" || normalizeHeader(name) === "value") {
+    return null;
+  }
+
+  return lead;
+}
+
+function extractLeadsFromWorkbook(buffer: Buffer): ImportedLeadRow[] {
+  const workbook = XLSX.read(buffer, { type: "buffer" });
+  const leads: ImportedLeadRow[] = [];
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(sheet, {
+      header: 1,
+      blankrows: false,
+      defval: "",
+      raw: false,
+    });
+
+    let headerRowIndex = -1;
+    let headerValues: string[] = [];
+
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index] || [];
+      const normalized = row.map((cell) => normalizeHeader(cell)).filter(Boolean);
+      const score = normalized.filter((value) => XLSX_LEADISH_HEADERS.has(value)).length;
+      if (score >= 2 || (score >= 1 && normalized.some((value) => XLSX_NAME_HEADERS.has(value)))) {
+        headerRowIndex = index;
+        headerValues = normalized;
+        break;
+      }
+    }
+
+    if (headerRowIndex < 0 || headerValues.length === 0) {
+      continue;
+    }
+
+    for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+      const row = rows[rowIndex] || [];
+      const record: Record<string, unknown> = {};
+      let hasNonEmptyCell = false;
+
+      headerValues.forEach((header, cellIndex) => {
+        if (!header) {
+          return;
+        }
+        const value = normalizeCellValue(row[cellIndex]);
+        if (value) {
+          hasNonEmptyCell = true;
+        }
+        record[header] = value;
+      });
+
+      if (!hasNonEmptyCell) {
+        continue;
+      }
+
+      const lead = extractLeadFromRecord(record);
+      if (lead) {
+        leads.push(lead);
+      }
+    }
+  }
+
+  return leads;
+}
+
+function parsePdfTableRow(line: string): ImportedLeadRow | null {
+  const email = pickFirstEmail(line);
+  const phone = pickFirstPhone(line);
+  if (!email && !phone) {
+    return null;
+  }
+
+  let name = line;
+  const cutoffCandidates = [email, phone].filter(Boolean);
+  for (const candidate of cutoffCandidates) {
+    const candidateIndex = name.indexOf(candidate);
+    if (candidateIndex > 0) {
+      name = name.slice(0, candidateIndex);
+      break;
+    }
+  }
+
+  name = sanitizeLeadName(name)
+    .replace(/[|•]+/g, " ")
+    .trim();
+
+  if (!name || isLikelyNoiseLine(name)) {
+    return null;
+  }
+
+  return {
+    name,
+    email,
+    phone,
+  };
+}
+
+function extractLeadsFromPdfText(text: string): ImportedLeadRow[] {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const leads: ImportedLeadRow[] = [];
+  let currentLead: ImportedLeadRow | null = null;
+
+  const flushCurrentLead = () => {
+    if (currentLead && hasMeaningfulLeadData(currentLead)) {
+      currentLead.name = sanitizeLeadName(currentLead.name);
+      if (currentLead.name || currentLead.email || currentLead.phone) {
+        leads.push(currentLead);
+      }
+    }
+    currentLead = null;
+  };
+
+  for (const line of lines) {
+    if (isLikelyNoiseLine(line)) {
+      continue;
+    }
+
+    const numberedLeadMatch = line.match(/^\d+\.\s+(.+)/);
+    if (numberedLeadMatch) {
+      flushCurrentLead();
+      currentLead = {
+        name: sanitizeLeadName(numberedLeadMatch[1] || ""),
+        email: "",
+        phone: "",
+      };
+      continue;
+    }
+
+    if (/^email\s*:/i.test(line)) {
+      const email = pickFirstEmail(line);
+      if (!currentLead) {
+        currentLead = { name: "", email: "", phone: "" };
+      }
+      currentLead.email = email;
+      continue;
+    }
+
+    if (/^phone\s*:/i.test(line)) {
+      const phone = pickFirstPhone(line);
+      if (!currentLead) {
+        currentLead = { name: "", email: "", phone: "" };
+      }
+      currentLead.phone = phone;
+      continue;
+    }
+
+    if (/^(website|address)\s*:/i.test(line)) {
+      continue;
+    }
+
+    const inlineLead = parsePdfTableRow(line);
+    if (inlineLead) {
+      flushCurrentLead();
+      leads.push(inlineLead);
+      continue;
+    }
+  }
+
+  flushCurrentLead();
+  return leads;
+}
+
+function dedupeImportedLeads(leads: ImportedLeadRow[]): ImportedLeadRow[] {
+  const seen = new Set<string>();
+  const unique: ImportedLeadRow[] = [];
+
+  for (const lead of leads) {
+    const normalizedLead = {
+      name: sanitizeLeadName(lead.name || ""),
+      email: pickFirstEmail(lead.email || ""),
+      phone: pickFirstPhone(lead.phone || ""),
+    };
+
+    if (!hasMeaningfulLeadData(normalizedLead)) {
+      continue;
+    }
+
+    const key = [
+      normalizeHeader(normalizedLead.name),
+      normalizedLead.email.toLowerCase(),
+      normalizedLead.phone.replace(/\D+/g, ""),
+    ].join("|");
+
+    if (!key || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    unique.push(normalizedLead);
+  }
+
+  return unique;
+}
+
 function toSafeUser(user: UserSafeRow): AuthTokenPayload {
   return {
     id: user.id,
@@ -751,7 +1137,12 @@ async function startServer() {
   apiRouter.post(
     "/leads/upload",
     upload.single("file"),
-    asyncHandler<Request & { file?: { originalname: string; buffer: Buffer } }>(async (req, res) => {
+    asyncHandler<AuthedRequest & { file?: { originalname: string; buffer: Buffer } }>(async (req, res) => {
+      if (!isAdminRole(req.user?.role)) {
+        res.status(403).json({ error: "Only administrators can import leads" });
+        return;
+      }
+
       if (!req.file) {
         res.status(400).json({ error: "No file uploaded" });
         return;
@@ -759,35 +1150,31 @@ async function startServer() {
 
       const fileName = req.file.originalname;
       const extension = path.extname(fileName).toLowerCase();
-      let leadsData: Record<string, string>[] = [];
+      let leadsData: ImportedLeadRow[] = [];
 
       if (extension === ".xlsx" || extension === ".xls") {
-        const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-        const sheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        leadsData = XLSX.utils.sheet_to_json(sheet) as Record<string, string>[];
+        leadsData = extractLeadsFromWorkbook(req.file.buffer);
       } else if (extension === ".pdf") {
         const data = await (pdf as unknown as (buffer: Buffer) => Promise<{ text: string }>)(req.file.buffer);
-        const lines = data.text.split("\n").filter((line) => line.trim());
-        leadsData = lines.map((line) => {
-          const parts = line.split(/\s+/);
-          return {
-            name: parts[0] || "Unknown",
-            email: parts[1] || "",
-            phone: parts[2] || "",
-          };
-        });
+        leadsData = extractLeadsFromPdfText(data.text);
       } else {
-        res.status(400).json({ error: "Unsupported file type" });
+        res.status(400).json({ error: "Unsupported file type. Upload a BamLead Excel or PDF file." });
+        return;
+      }
+
+      const uniqueLeads = dedupeImportedLeads(leadsData);
+      if (uniqueLeads.length === 0) {
+        res.status(400).json({ error: "No leads were detected in this file. Use a BamLead Excel or PDF export." });
         return;
       }
 
       await db.transaction(async (trx) => {
-        const rows = leadsData.map((lead) => ({
+        const rows = uniqueLeads.map((lead) => ({
           name: lead.name || "Unknown",
           email: lead.email || "",
           phone: lead.phone || "",
           source: fileName,
+          created_by_user_id: req.user?.id || null,
         }));
 
         if (rows.length > 0) {
@@ -795,7 +1182,7 @@ async function startServer() {
         }
       });
 
-      res.json({ success: true, count: leadsData.length });
+      res.json({ success: true, count: uniqueLeads.length });
     }),
   );
 

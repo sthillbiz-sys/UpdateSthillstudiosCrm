@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react';
 import { supabase } from '../lib/supabase';
 import { useEmployee } from '../lib/employee';
-import { Users as Users2, TrendingUp, Phone, Calendar, DollarSign, Eye, X } from 'lucide-react';
-import { apiGet, apiPut } from '../lib/api';
+import { Users as Users2, TrendingUp, Phone, Calendar, DollarSign, Eye, Upload, X } from 'lucide-react';
+import { apiGet, apiPut, uploadLeadImportFile } from '../lib/api';
 
 interface Agent {
   id: string;
@@ -44,6 +44,8 @@ interface AssignableLead {
   assignedTo: string | null;
 }
 
+const ACCEPTED_IMPORT_EXTENSIONS = ['.xlsx', '.xls', '.pdf'];
+
 export function AgentDashboards() {
   const { isAdmin, allEmployees, loading: employeesLoading, refreshAllEmployees } = useEmployee();
   const [onlinePresence, setOnlinePresence] = useState<Record<string, boolean>>({});
@@ -65,6 +67,11 @@ export function AgentDashboards() {
   const [draggingLeadId, setDraggingLeadId] = useState<number | null>(null);
   const [dropTargetAgentId, setDropTargetAgentId] = useState<string | null>(null);
   const [routingLeadId, setRoutingLeadId] = useState<number | null>(null);
+  const [uploadingLeadImport, setUploadingLeadImport] = useState(false);
+  const [leadImportDragActive, setLeadImportDragActive] = useState(false);
+  const [leadImportMessage, setLeadImportMessage] = useState('');
+  const [leadImportError, setLeadImportError] = useState('');
+  const leadImportInputRef = useRef<HTMLInputElement>(null);
 
   const agents = useMemo<Agent[]>(() => {
     const mapped = allEmployees.map((emp) => {
@@ -528,6 +535,66 @@ export function AgentDashboards() {
     }
   };
 
+  const refreshDashboardAfterImport = async () => {
+    await Promise.all([
+      loadAssignableLeads(),
+      loadOverallTotals(),
+      loadAllAgentStats(agents),
+    ]);
+
+    if (selectedAgentMeta) {
+      await loadAgentDetails(selectedAgentMeta);
+    }
+  };
+
+  const isSupportedImportFile = (fileName: string) => {
+    const lower = fileName.toLowerCase();
+    return ACCEPTED_IMPORT_EXTENSIONS.some((extension) => lower.endsWith(extension));
+  };
+
+  const handleLeadImport = async (file: File | null) => {
+    if (!file) {
+      return;
+    }
+
+    if (!isSupportedImportFile(file.name)) {
+      setLeadImportError('Upload a BamLead Excel or PDF file.');
+      setLeadImportMessage('');
+      return;
+    }
+
+    setUploadingLeadImport(true);
+    setLeadImportError('');
+    setLeadImportMessage('');
+
+    try {
+      const response = await uploadLeadImportFile(file);
+      await refreshDashboardAfterImport();
+      setLeadImportMessage(`Imported ${response?.count || 0} leads from ${file.name}.`);
+    } catch (error) {
+      console.error('Error importing BamLead leads:', error);
+      setLeadImportError(error instanceof Error ? error.message : 'Failed to import the BamLead file.');
+    } finally {
+      setUploadingLeadImport(false);
+      setLeadImportDragActive(false);
+      if (leadImportInputRef.current) {
+        leadImportInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleLeadImportInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] || null;
+    await handleLeadImport(file);
+  };
+
+  const handleLeadImportDrop = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setLeadImportDragActive(false);
+    const file = event.dataTransfer.files?.[0] || null;
+    await handleLeadImport(file);
+  };
+
   if (!isAdmin) {
     return (
       <div className="p-8 bg-[#FDF8F3] min-h-screen">
@@ -563,6 +630,90 @@ export function AgentDashboards() {
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-900 mb-1">Agent Dashboards</h1>
         <p className="text-sm text-gray-600">Monitor and manage your team's performance</p>
+      </div>
+
+      <div className="mb-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">BamLead Import</h2>
+            <p className="mt-1 text-sm text-gray-600">
+              Admins can drag and drop BamLead Excel or PDF exports here. Imported leads go into the unassigned routing queue.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => leadImportInputRef.current?.click()}
+            disabled={uploadingLeadImport}
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            <Upload className="h-4 w-4" />
+            {uploadingLeadImport ? 'Importing...' : 'Browse Files'}
+          </button>
+        </div>
+
+        <input
+          ref={leadImportInputRef}
+          type="file"
+          accept=".xlsx,.xls,.pdf"
+          onChange={(event) => {
+            void handleLeadImportInputChange(event);
+          }}
+          className="hidden"
+        />
+
+        <div
+          onDragOver={(event) => {
+            event.preventDefault();
+            if (!uploadingLeadImport) {
+              setLeadImportDragActive(true);
+            }
+          }}
+          onDragEnter={(event) => {
+            event.preventDefault();
+            if (!uploadingLeadImport) {
+              setLeadImportDragActive(true);
+            }
+          }}
+          onDragLeave={(event) => {
+            event.preventDefault();
+            if (event.currentTarget === event.target) {
+              setLeadImportDragActive(false);
+            }
+          }}
+          onDrop={(event) => {
+            void handleLeadImportDrop(event);
+          }}
+          className={`mt-5 rounded-2xl border-2 border-dashed px-6 py-10 text-center transition-colors ${
+            leadImportDragActive
+              ? 'border-blue-500 bg-blue-50'
+              : 'border-slate-300 bg-slate-50'
+          }`}
+        >
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-white shadow-sm">
+            <Upload className={`h-6 w-6 ${leadImportDragActive ? 'text-blue-600' : 'text-slate-500'}`} />
+          </div>
+          <p className="mt-4 text-base font-semibold text-slate-900">
+            Drop BamLead Excel or PDF files here
+          </p>
+          <p className="mt-2 text-sm text-gray-600">
+            Accepted formats: `.xlsx`, `.xls`, `.pdf`
+          </p>
+          <p className="mt-1 text-xs text-gray-500">
+            Best results come from BamLead lead exports such as verified leads and intelligence reports.
+          </p>
+        </div>
+
+        {leadImportMessage && (
+          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+            {leadImportMessage}
+          </div>
+        )}
+
+        {leadImportError && (
+          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {leadImportError}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
