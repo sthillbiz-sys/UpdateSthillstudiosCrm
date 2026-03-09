@@ -1012,6 +1012,58 @@ function telnyx_extract_token_from_response(string $body): string {
     return '';
 }
 
+function telnyx_extract_error_message(string $body): string {
+    $decoded = json_decode($body, true);
+    if (!is_array($decoded)) {
+        return '';
+    }
+
+    $candidates = [];
+
+    $topLevel = trim((string) ($decoded['message'] ?? ''));
+    if ($topLevel !== '') {
+        $candidates[] = $topLevel;
+    }
+
+    $errors = $decoded['errors'] ?? null;
+    if (is_array($errors)) {
+        foreach ($errors as $error) {
+            if (!is_array($error)) {
+                continue;
+            }
+            $detail = trim((string) ($error['detail'] ?? ''));
+            $title = trim((string) ($error['title'] ?? ''));
+            $code = trim((string) ($error['code'] ?? ''));
+            foreach ([$detail, $title, $code] as $value) {
+                if ($value !== '') {
+                    $candidates[] = $value;
+                }
+            }
+        }
+    }
+
+    $error = $decoded['error'] ?? null;
+    if (is_array($error)) {
+        foreach (['message', 'detail', 'title', 'code'] as $field) {
+            $value = trim((string) ($error[$field] ?? ''));
+            if ($value !== '') {
+                $candidates[] = $value;
+            }
+        }
+    } elseif (is_string($error) && trim($error) !== '') {
+        $candidates[] = trim($error);
+    }
+
+    $unique = [];
+    foreach ($candidates as $candidate) {
+        if (!in_array($candidate, $unique, true)) {
+            $unique[] = $candidate;
+        }
+    }
+
+    return trim(implode(' | ', $unique));
+}
+
 function telnyx_decode_jwt_exp(string $token): ?int {
     $parts = explode('.', $token);
     if (count($parts) !== 3) {
@@ -1174,7 +1226,19 @@ function telnyx_issue_access_token(): array {
     $body = (string) ($response['body'] ?? '');
 
     if ($status < 200 || $status >= 300) {
-        throw new RuntimeException('Unable to generate Telnyx access token.');
+        $errorMessage = telnyx_extract_error_message($body);
+        if ($errorMessage !== '') {
+            throw new RuntimeException(sprintf(
+                'Unable to generate Telnyx access token (HTTP %d: %s).',
+                $status,
+                $errorMessage
+            ));
+        }
+
+        throw new RuntimeException(sprintf(
+            'Unable to generate Telnyx access token (HTTP %d).',
+            $status
+        ));
     }
 
     $token = telnyx_extract_token_from_response($body);
