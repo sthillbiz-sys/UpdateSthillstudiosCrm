@@ -198,6 +198,12 @@ jobs:
           CRM_ADMIN_EMAIL: ${{ secrets.CRM_ADMIN_EMAIL }}
           CRM_ADMIN_PASSWORD: ${{ secrets.CRM_ADMIN_PASSWORD }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELNYX_API_KEY: ${{ secrets.TELNYX_API_KEY }}
+          TELNYX_TELEPHONY_CREDENTIAL_ID: ${{ secrets.TELNYX_TELEPHONY_CREDENTIAL_ID }}
+          TELNYX_CALLER_NUMBERS: ${{ secrets.TELNYX_CALLER_NUMBERS }}
+          TELNYX_CALLER_NUMBER: ${{ secrets.TELNYX_CALLER_NUMBER }}
+          TELNYX_ACCESS_TOKEN_TTL_SECONDS: ${{ secrets.TELNYX_ACCESS_TOKEN_TTL_SECONDS }}
+          TELNYX_API_BASE_URL: ${{ secrets.TELNYX_API_BASE_URL }}
           RUN_SQLITE_IMPORT: ${{ secrets.RUN_SQLITE_IMPORT }}
           CRM_START_MODE: ${{ secrets.CRM_START_MODE }}
           CRM_ENV_FILE: ${{ secrets.CRM_ENV_FILE }}
@@ -206,7 +212,7 @@ jobs:
           username: ${{ secrets.HOSTINGER_SSH_USER }}
           key: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
           port: ${{ secrets.HOSTINGER_SSH_PORT }}
-          envs: DEPLOY_PATH,NPM_BIN,NODE_ENV,PORT,CRM_BASE_PATH,MYSQL_HOST,MYSQL_PORT,MYSQL_SOCKET_PATH,MYSQL_USER,MYSQL_PASSWORD,MYSQL_DATABASE,MYSQL_SSL,MYSQL_SSL_CA_BASE64,SQLITE_SOURCE_PATH,ALLOW_SIGNUP,JWT_SECRET,CRM_ADMIN_NAME,CRM_ADMIN_EMAIL,CRM_ADMIN_PASSWORD,GEMINI_API_KEY,RUN_SQLITE_IMPORT,CRM_START_MODE,CRM_ENV_FILE
+          envs: DEPLOY_PATH,NPM_BIN,NODE_ENV,PORT,CRM_BASE_PATH,MYSQL_HOST,MYSQL_PORT,MYSQL_SOCKET_PATH,MYSQL_USER,MYSQL_PASSWORD,MYSQL_DATABASE,MYSQL_SSL,MYSQL_SSL_CA_BASE64,SQLITE_SOURCE_PATH,ALLOW_SIGNUP,JWT_SECRET,CRM_ADMIN_NAME,CRM_ADMIN_EMAIL,CRM_ADMIN_PASSWORD,GEMINI_API_KEY,TELNYX_API_KEY,TELNYX_TELEPHONY_CREDENTIAL_ID,TELNYX_CALLER_NUMBERS,TELNYX_CALLER_NUMBER,TELNYX_ACCESS_TOKEN_TTL_SECONDS,TELNYX_API_BASE_URL,RUN_SQLITE_IMPORT,CRM_START_MODE,CRM_ENV_FILE
           script_stop: true
           script: |
             set -eu
@@ -306,6 +312,21 @@ jobs:
               echo "Missing database/app secrets. Set CRM_ENV_FILE or MYSQL_HOST/MYSQL_SOCKET_PATH + auth secrets."
               exit 1
             fi
+
+            append_runtime_env() {
+              key="$1"
+              value="$2"
+              if [ -n "$value" ]; then
+                printf "%s=%s\n" "$key" "$value" >> .env.local
+              fi
+            }
+
+            append_runtime_env "TELNYX_API_KEY" "${TELNYX_API_KEY:-}"
+            append_runtime_env "TELNYX_TELEPHONY_CREDENTIAL_ID" "${TELNYX_TELEPHONY_CREDENTIAL_ID:-}"
+            append_runtime_env "TELNYX_CALLER_NUMBERS" "${TELNYX_CALLER_NUMBERS:-}"
+            append_runtime_env "TELNYX_CALLER_NUMBER" "${TELNYX_CALLER_NUMBER:-}"
+            append_runtime_env "TELNYX_ACCESS_TOKEN_TTL_SECONDS" "${TELNYX_ACCESS_TOKEN_TTL_SECONDS:-}"
+            append_runtime_env "TELNYX_API_BASE_URL" "${TELNYX_API_BASE_URL:-}"
 
             echo "[deploy] PHP-only runtime mode enabled (no remote Node/npm required)"
             echo "[deploy] skipping remote npm install, migrations, and Node process actions"
