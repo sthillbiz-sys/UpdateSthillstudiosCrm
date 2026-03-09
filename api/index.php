@@ -329,6 +329,10 @@ try {
             json_response([
                 'token' => (string) ($result['token'] ?? ''),
                 'callerNumber' => (string) ($result['caller_number'] ?? ''),
+                'callerNumbers' => array_values(array_filter(
+                    is_array($result['caller_numbers'] ?? null) ? $result['caller_numbers'] : [],
+                    static fn ($value): bool => is_string($value) && trim($value) !== ''
+                )),
                 'expiresAt' => (string) ($result['expires_at'] ?? ''),
                 'expiresIn' => (int) ($result['expires_in'] ?? 0),
             ]);

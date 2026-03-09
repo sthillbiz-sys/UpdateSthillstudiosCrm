@@ -16,6 +16,7 @@ type DialerCallState = 'idle' | 'dialing' | 'ringing' | 'active';
 type TelnyxAccessTokenResponse = {
   token: string;
   callerNumber?: string;
+  callerNumbers?: string[];
   expiresAt?: string;
   expiresIn?: number;
 };
@@ -133,13 +134,14 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
   const [isMuted, setIsMuted] = useState(false);
   const [callHistory, setCallHistory] = useState<CallHistoryItem[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [callerNumbers, setCallerNumbers] = useState<string[]>([]);
+  const [selectedCallerNumber, setSelectedCallerNumber] = useState('');
 
   const dialerRef = useRef<HTMLDivElement>(null);
   const telnyxClientRef = useRef<TelnyxRTC | null>(null);
   const activeCallRef = useRef<TelnyxCall | null>(null);
   const callStartedAtRef = useRef<number | null>(null);
   const dialedNumberRef = useRef('');
-  const callerNumberRef = useRef('');
   const callLoggedRef = useRef(false);
   const lastTelnyxStateRef = useRef('');
 
@@ -189,6 +191,8 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
     setCallState('idle');
     setIsMuted(false);
   }, []);
+
+  const hasMultipleCallerNumbers = callerNumbers.length > 1;
 
   const finalizeAndLogCall = useCallback(
     async (finalTelnyxState: string) => {
@@ -286,14 +290,28 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
     const payload = await apiPost<TelnyxAccessTokenResponse>('/telnyx/access-token', {});
     const token = String(payload?.token || '').trim();
     const callerNumber = String(payload?.callerNumber || '').trim();
+    const configuredCallerNumbers = Array.from(
+      new Set(
+        [
+          ...(Array.isArray(payload?.callerNumbers) ? payload.callerNumbers : []),
+          callerNumber,
+        ]
+          .map((value) => String(value || '').trim())
+          .filter((value) => value !== ''),
+      ),
+    );
     if (token === '') {
       throw new Error('Missing Telnyx token response.');
     }
-    if (callerNumber === '') {
+    if (configuredCallerNumbers.length === 0) {
       throw new Error('Missing Telnyx caller number configuration.');
     }
 
-    callerNumberRef.current = callerNumber;
+    setCallerNumbers(configuredCallerNumbers);
+    setSelectedCallerNumber((current) => (
+      current !== '' && configuredCallerNumbers.includes(current) ? current : configuredCallerNumbers[0]
+    ));
+
     const client = new TelnyxRTC({
       login_token: token,
       debug: false,
@@ -381,6 +399,10 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       setDialerMessage('Enter a valid number (US 10 digits or E.164).');
       return;
     }
+    if (selectedCallerNumber === '') {
+      setDialerMessage('Select a caller ID before placing a call.');
+      return;
+    }
 
     try {
       dialedNumberRef.current = destination;
@@ -395,7 +417,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
 
       const call = client.newCall({
         destinationNumber: destination,
-        callerNumber: callerNumberRef.current,
+        callerNumber: selectedCallerNumber,
         remoteElement: 'telnyx-remote-audio',
         audio: true,
       });
@@ -408,7 +430,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       void setOnCall(false);
       void updatePresence('available');
     }
-  }, [connectionState, phoneNumber, setOnCall, updatePresence]);
+  }, [connectionState, phoneNumber, selectedCallerNumber, setOnCall, updatePresence]);
 
   const hangupCall = useCallback(() => {
     const call = activeCallRef.current;
@@ -637,12 +659,32 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
                   {dialerMessage}
                 </p>
               )}
-              {callerNumberRef.current !== '' && (
+              {selectedCallerNumber !== '' && (
                 <p className="text-slate-400 mt-1">
-                  Caller ID: {callerNumberRef.current}
+                  Caller ID: {selectedCallerNumber}
                 </p>
               )}
             </div>
+
+            {callerNumbers.length > 0 && (
+              <div className="mb-3">
+                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-cyan-300">
+                  Outbound Number
+                </label>
+                <select
+                  value={selectedCallerNumber}
+                  onChange={(e) => setSelectedCallerNumber(e.target.value)}
+                  disabled={isInCall || callerNumbers.length === 1}
+                  className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs text-white outline-none transition focus:border-cyan-500 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {callerNumbers.map((number) => (
+                    <option key={number} value={number}>
+                      {hasMultipleCallerNumbers ? `Use ${number}` : number}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div className="grid grid-cols-4 gap-2">
               <button className="flex flex-col items-center gap-0.5 p-2 bg-slate-700/50 hover:bg-slate-700 rounded-lg transition-all border border-slate-600">
@@ -794,10 +836,30 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
                   {formatPhoneNumber(phoneNumber)}
                 </div>
                 <div className="text-xs text-slate-400">
-                  {dialerMessage || `Caller ID: ${callerNumberRef.current || 'N/A'}`}
+                  {dialerMessage || `Caller ID: ${selectedCallerNumber || 'N/A'}`}
                 </div>
               </div>
             </div>
+
+            {callerNumbers.length > 0 && (
+              <div className="mb-4">
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Outbound Number
+                </label>
+                <select
+                  value={selectedCallerNumber}
+                  onChange={(e) => setSelectedCallerNumber(e.target.value)}
+                  disabled={isInCall || callerNumbers.length === 1}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none transition focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {callerNumbers.map((number) => (
+                    <option key={number} value={number}>
+                      {number}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div className="grid grid-cols-3 gap-3 mb-4">
               {buttons.map((btn) => (

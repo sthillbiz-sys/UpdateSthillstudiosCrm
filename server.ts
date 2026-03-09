@@ -58,6 +58,7 @@ type JoinInfo = {
   userId: number;
   role: string;
   name: string;
+  email: string;
   roomId: string;
 };
 
@@ -276,6 +277,7 @@ async function startServer() {
           userId: authUser.id,
           role: authUser.role,
           name: displayName,
+          email: authUser.email,
           roomId,
         });
         broadcastPresence(roomId);
@@ -324,6 +326,54 @@ async function startServer() {
           if (recipient && isAdminRole(recipient.role)) {
             clientSocket.send(payload);
           }
+        });
+        return;
+      }
+
+      if (message.type === "meeting-invite") {
+        const sender = clients.get(ws);
+        if (!sender) {
+          return;
+        }
+
+        const attendees = Array.isArray(message.attendees)
+          ? message.attendees
+              .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
+              .filter((value) => value.length > 0)
+          : [];
+
+        if (attendees.length === 0) {
+          return;
+        }
+
+        const payload = JSON.stringify({
+          type: "meeting-invite-alert",
+          meetingId: typeof message.meetingId === "number" || typeof message.meetingId === "string" ? message.meetingId : null,
+          title: typeof message.title === "string" ? message.title : "Meeting invite",
+          meetingType: typeof message.meetingType === "string" ? message.meetingType : "video",
+          roomName: typeof message.roomName === "string" ? message.roomName : "SthillStudiosMain",
+          status: typeof message.status === "string" ? message.status : "scheduled",
+          scheduledDate: typeof message.scheduledDate === "string" ? message.scheduledDate : "",
+          scheduledTime: typeof message.scheduledTime === "string" ? message.scheduledTime : "",
+          senderName: sender.name,
+          timestamp: new Date().toISOString(),
+        });
+
+        wss.clients.forEach((clientSocket) => {
+          if (clientSocket.readyState !== WebSocket.OPEN) {
+            return;
+          }
+          const recipient = clients.get(clientSocket);
+          if (!recipient) {
+            return;
+          }
+
+          const recipientEmail = recipient.email.trim().toLowerCase();
+          if (!recipientEmail || !attendees.includes(recipientEmail)) {
+            return;
+          }
+
+          clientSocket.send(payload);
         });
       }
     });

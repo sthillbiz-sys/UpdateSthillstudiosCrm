@@ -36,6 +36,7 @@ interface EmployeeOption {
 const PRIMARY_JITSI_DOMAIN = 'meet.sthillstudios.com';
 const FALLBACK_JITSI_DOMAIN = 'meet.jit.si';
 const JITSI_SCRIPT_TIMEOUT_MS = 10000;
+const PENDING_INVITE_STORAGE_KEY = 'crm_pending_meeting_invite';
 
 function loadJitsiExternalApi(domain: string): Promise<boolean> {
   if (typeof window === 'undefined') {
@@ -182,6 +183,7 @@ export function Meetings() {
         })),
     [allEmployees, user?.email],
   );
+  const hasManualRoomInput = roomInput.trim().length > 0;
 
   useEffect(() => {
     let cancelled = false;
@@ -274,7 +276,7 @@ export function Meetings() {
   }) => {
     const resolvedRoomName =
       roomName?.trim() || `Sthill-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-    const { error } = await supabase.from('meetings').insert({
+    const { data, error } = await supabase.from('meetings').insert({
       title,
       meeting_type: meetingType,
       scheduled_date: scheduledDate,
@@ -289,6 +291,21 @@ export function Meetings() {
 
     if (error) {
       throw error;
+    }
+
+    if (attendees.length > 0 && meetingType !== 'in-person') {
+      window.dispatchEvent(new CustomEvent('meetingInviteCreated', {
+        detail: {
+          meetingId: data?.id ?? null,
+          title,
+          meetingType,
+          roomName: resolvedRoomName,
+          status,
+          scheduledDate,
+          scheduledTime,
+          attendees,
+        },
+      }));
     }
 
     return resolvedRoomName;
@@ -382,6 +399,33 @@ export function Meetings() {
 
     openQuickCallFallback(room, meetingType === 'phone' ? 'phone' : 'video');
   };
+
+  useEffect(() => {
+    const consumePendingInvite = (invite: any) => {
+      if (!invite?.roomName) {
+        return;
+      }
+
+      joinMeetingRoom(String(invite.roomName), String(invite.meetingType || 'video'));
+      sessionStorage.removeItem(PENDING_INVITE_STORAGE_KEY);
+    };
+
+    const rawPendingInvite = sessionStorage.getItem(PENDING_INVITE_STORAGE_KEY);
+    if (rawPendingInvite) {
+      try {
+        consumePendingInvite(JSON.parse(rawPendingInvite));
+      } catch {
+        sessionStorage.removeItem(PENDING_INVITE_STORAGE_KEY);
+      }
+    }
+
+    const handleMeetingInviteJoin = (event: CustomEvent<{ roomName: string; meetingType?: string }>) => {
+      consumePendingInvite(event.detail);
+    };
+
+    window.addEventListener('meetingInviteJoin' as any, handleMeetingInviteJoin);
+    return () => window.removeEventListener('meetingInviteJoin' as any, handleMeetingInviteJoin);
+  }, [jitsiLoaded, jitsiError]);
 
   const renderEmployeeSelector = (
     selectedEmails: string[],
@@ -567,8 +611,10 @@ export function Meetings() {
   };
 
   const handleJoinMeeting = async () => {
+    const requestedRoom = roomInput.trim();
+
     if (!jitsiLoaded) {
-      const fallbackRoom = roomInput.trim() || 'SthillStudiosMain';
+      const fallbackRoom = requestedRoom || 'SthillStudiosMain';
       if (jitsiError) {
         openQuickCallFallback(fallbackRoom, 'video');
         return;
@@ -577,9 +623,21 @@ export function Meetings() {
       return;
     }
 
-    if (!isAdmin || joinSelectedEmployeeEmails.length === 0) {
-      const room = roomInput.trim() || 'SthillStudiosMain';
+    // A manually entered room name should always join that room directly.
+    if (requestedRoom) {
+      const room = requestedRoom || 'SthillStudiosMain';
       setSelectedRoomName(room);
+      setRoomInput(room);
+      setActiveMeetingType('video');
+      setInMeeting(true);
+      return;
+    }
+
+    if (!isAdmin || joinSelectedEmployeeEmails.length === 0) {
+      const room = 'SthillStudiosMain';
+      setSelectedRoomName(room);
+      setRoomInput(room);
+      setActiveMeetingType('video');
       setInMeeting(true);
       return;
     }
@@ -592,7 +650,6 @@ export function Meetings() {
       const title =
         joinMeetingTitle.trim() ||
         buildSelectedEmployeeTitle(joinSelectedEmployeeEmails, 'Live team meeting');
-      const preferredRoomName = roomInput.trim();
 
       const roomName = await createMeetingRecord({
         title,
@@ -603,7 +660,6 @@ export function Meetings() {
         description: '',
         attendees: joinSelectedEmployeeEmails,
         status: 'live',
-        roomName: preferredRoomName,
       });
 
       await fetchMeetings();
@@ -732,7 +788,7 @@ export function Meetings() {
                   value={roomInput}
                   onChange={(e) => setRoomInput(e.target.value)}
                   placeholder={
-                    isAdmin && joinSelectedEmployeeEmails.length > 0
+                    isAdmin && joinSelectedEmployeeEmails.length > 0 && !hasManualRoomInput
                       ? 'Optional private room name. Leave blank to generate one.'
                       : 'Enter room name or leave blank for main room'
                   }
@@ -762,21 +818,21 @@ export function Meetings() {
                     </>
                   ) : jitsiError ? (
                     <>
-                      {isAdmin && joinSelectedEmployeeEmails.length > 0
+                      {isAdmin && joinSelectedEmployeeEmails.length > 0 && !hasManualRoomInput
                         ? 'Start meeting (Fallback mode)'
                         : 'Join meeting (Fallback mode)'}
                       <Video className="w-6 h-6" />
                     </>
                   ) : jitsiDomain === FALLBACK_JITSI_DOMAIN ? (
                     <>
-                      {isAdmin && joinSelectedEmployeeEmails.length > 0
+                      {isAdmin && joinSelectedEmployeeEmails.length > 0 && !hasManualRoomInput
                         ? 'Start meeting (Backup provider)'
                         : 'Join meeting (Backup provider)'}
                       <Video className="w-6 h-6" />
                     </>
                   ) : (
                     <>
-                      {isAdmin && joinSelectedEmployeeEmails.length > 0 ? 'Start meeting' : 'Join meeting'}
+                      {isAdmin && joinSelectedEmployeeEmails.length > 0 && !hasManualRoomInput ? 'Start meeting' : 'Join meeting'}
                       <Video className="w-6 h-6" />
                     </>
                   )}

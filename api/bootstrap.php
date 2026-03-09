@@ -1032,6 +1032,51 @@ function telnyx_decode_jwt_exp(string $token): ?int {
     return $value > 0 ? $value : null;
 }
 
+function telnyx_normalize_phone_number(string $value): string {
+    $trimmed = trim($value);
+    if ($trimmed === '') {
+        return '';
+    }
+
+    if (str_starts_with($trimmed, '+')) {
+        $digits = preg_replace('/\D+/', '', substr($trimmed, 1));
+        if (is_string($digits) && strlen($digits) >= 8 && strlen($digits) <= 15) {
+            return '+' . $digits;
+        }
+        return '';
+    }
+
+    $digits = preg_replace('/\D+/', '', $trimmed);
+    if (!is_string($digits) || strlen($digits) < 8 || strlen($digits) > 15) {
+        return '';
+    }
+
+    return '+' . $digits;
+}
+
+function telnyx_configured_caller_numbers(): array {
+    $rawList = trim((string) env('TELNYX_CALLER_NUMBERS', ''));
+    $legacySingle = trim((string) env('TELNYX_CALLER_NUMBER', ''));
+
+    $values = [];
+    if ($rawList !== '') {
+        $values = preg_split('/[\s,]+/', $rawList) ?: [];
+    } elseif ($legacySingle !== '') {
+        $values = [$legacySingle];
+    }
+
+    $normalized = [];
+    foreach ($values as $value) {
+        $number = telnyx_normalize_phone_number((string) $value);
+        if ($number === '' || in_array($number, $normalized, true)) {
+            continue;
+        }
+        $normalized[] = $number;
+    }
+
+    return $normalized;
+}
+
 function telnyx_http_post_json(string $url, string $apiKey, array $payload): array {
     $body = json_encode($payload, JSON_UNESCAPED_SLASHES);
     if (!is_string($body)) {
@@ -1110,7 +1155,8 @@ function telnyx_http_post_json(string $url, string $apiKey, array $payload): arr
 function telnyx_issue_access_token(): array {
     $apiKey = trim((string) env('TELNYX_API_KEY', ''));
     $credentialId = trim((string) env('TELNYX_TELEPHONY_CREDENTIAL_ID', ''));
-    $callerNumber = trim((string) env('TELNYX_CALLER_NUMBER', ''));
+    $callerNumbers = telnyx_configured_caller_numbers();
+    $callerNumber = $callerNumbers[0] ?? '';
 
     if ($apiKey === '' || $credentialId === '' || $callerNumber === '') {
         throw new RuntimeException('Telnyx configuration is incomplete.');
@@ -1142,6 +1188,7 @@ function telnyx_issue_access_token(): array {
     return [
         'token' => $token,
         'caller_number' => $callerNumber,
+        'caller_numbers' => $callerNumbers,
         'expires_at' => gmdate('c', $effectiveExp),
         'expires_in' => max(0, $effectiveExp - time()),
     ];

@@ -13,6 +13,7 @@ import { CallReports } from './CallReports';
 import { Employees } from './Employees';
 import { AgentDashboards } from './AgentDashboards';
 import { HelpNotification } from './HelpNotification';
+import { MeetingInviteNotification } from './MeetingInviteNotification';
 import { FloatingActions } from './FloatingActions';
 import { QuickCall } from './QuickCall';
 import { PhoneDialer } from './PhoneDialer';
@@ -20,6 +21,16 @@ import { LOGO_SRC } from '../lib/assets';
 import { createWsUrl } from '../lib/api';
 
 type View = 'dashboard' | 'crm' | 'projects' | 'leads' | 'calendar' | 'timeTracking' | 'messages' | 'meetings' | 'callReports' | 'employees' | 'agentDashboards';
+type MeetingInvitePayload = {
+  meetingId?: string | number | null;
+  title: string;
+  meetingType: string;
+  roomName: string;
+  status: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  attendees: string[];
+};
 
 export function CRM() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
@@ -112,21 +123,45 @@ export function CRM() {
             agentEmail?: string;
             page?: string;
             timestamp?: string;
+            meetingId?: string | number | null;
+            title?: string;
+            meetingType?: string;
+            roomName?: string;
+            status?: string;
+            scheduledDate?: string;
+            scheduledTime?: string;
+            senderName?: string;
           };
 
-          if (payload.type !== 'help-alert' || !isAdmin) {
+          if (payload.type === 'help-alert' && isAdmin) {
+            window.dispatchEvent(new CustomEvent('helpRequest', {
+              detail: {
+                id: `${payload.agentEmail || payload.agentName || 'help'}-${payload.timestamp || Date.now()}`,
+                userName: payload.agentName || 'User',
+                userEmail: payload.agentEmail || '',
+                page: payload.page || 'dashboard',
+                timestamp: payload.timestamp || new Date().toISOString(),
+              },
+            }));
             return;
           }
 
-          window.dispatchEvent(new CustomEvent('helpRequest', {
-            detail: {
-              id: `${payload.agentEmail || payload.agentName || 'help'}-${payload.timestamp || Date.now()}`,
-              userName: payload.agentName || 'User',
-              userEmail: payload.agentEmail || '',
-              page: payload.page || 'dashboard',
-              timestamp: payload.timestamp || new Date().toISOString(),
-            },
-          }));
+          if (payload.type === 'meeting-invite-alert') {
+            window.dispatchEvent(new CustomEvent('meetingInvite', {
+              detail: {
+                id: String(payload.meetingId || `${payload.roomName || 'meeting'}-${payload.timestamp || Date.now()}`),
+                meetingId: payload.meetingId ?? null,
+                title: payload.title || 'Meeting invite',
+                meetingType: payload.meetingType || 'video',
+                roomName: payload.roomName || 'SthillStudiosMain',
+                status: payload.status || 'scheduled',
+                scheduledDate: payload.scheduledDate || '',
+                scheduledTime: payload.scheduledTime || '',
+                senderName: payload.senderName || 'Team',
+                timestamp: payload.timestamp || new Date().toISOString(),
+              },
+            }));
+          }
         } catch {
           // Ignore malformed websocket payloads.
         }
@@ -158,6 +193,42 @@ export function CRM() {
       }
     };
   }, [isAdmin, user]);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+
+    const handleMeetingInviteCreated = (event: CustomEvent<MeetingInvitePayload>) => {
+      const socket = helpSocketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      const attendees = Array.isArray(event.detail?.attendees)
+        ? event.detail.attendees.map((attendee) => String(attendee || '').trim()).filter(Boolean)
+        : [];
+
+      if (attendees.length === 0) {
+        return;
+      }
+
+      socket.send(JSON.stringify({
+        type: 'meeting-invite',
+        meetingId: event.detail.meetingId ?? null,
+        title: event.detail.title,
+        meetingType: event.detail.meetingType,
+        roomName: event.detail.roomName,
+        status: event.detail.status,
+        scheduledDate: event.detail.scheduledDate,
+        scheduledTime: event.detail.scheduledTime,
+        attendees,
+      }));
+    };
+
+    window.addEventListener('meetingInviteCreated' as any, handleMeetingInviteCreated);
+    return () => window.removeEventListener('meetingInviteCreated' as any, handleMeetingInviteCreated);
+  }, [user]);
 
   const handleRequestHelp = () => {
     if (!user || isAdmin) {
@@ -300,6 +371,12 @@ export function CRM() {
         </div>
         {renderView()}
         <HelpNotification />
+        <MeetingInviteNotification
+          onJoinMeeting={() => {
+            setCurrentView('meetings');
+            setSidebarOpen(false);
+          }}
+        />
         <FloatingActions
           onPhoneClick={() => setShowPhoneDialer(true)}
           onMessageClick={() => setCurrentView('messages')}
