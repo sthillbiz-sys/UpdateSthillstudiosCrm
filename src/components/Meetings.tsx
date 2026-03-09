@@ -142,6 +142,7 @@ export function Meetings() {
   const [jitsiDomain, setJitsiDomain] = useState(PRIMARY_JITSI_DOMAIN);
   const [jitsiLoaded, setJitsiLoaded] = useState(false);
   const [jitsiError, setJitsiError] = useState(false);
+  const [meetingControlsReady, setMeetingControlsReady] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
   const [videoMuted, setVideoMuted] = useState(false);
   const [backgroundBlurred, setBackgroundBlurred] = useState(false);
@@ -374,6 +375,19 @@ export function Meetings() {
     }
   };
 
+  const leaveMeeting = () => {
+    if (jitsiApiRef.current) {
+      jitsiApiRef.current.dispose();
+      jitsiApiRef.current = null;
+    }
+
+    setMeetingControlsReady(false);
+    setInMeeting(false);
+    setAudioMuted(false);
+    setVideoMuted(false);
+    setBackgroundBlurred(false);
+  };
+
   const openQuickCallFallback = (roomName: string, meetingType: 'video' | 'phone' = 'video') => {
     setSelectedRoomName(roomName.trim() || 'SthillStudiosMain');
     setActiveMeetingType(meetingType);
@@ -521,6 +535,7 @@ export function Meetings() {
     }
 
     try {
+      setMeetingControlsReady(false);
       const domain = jitsiDomain;
       const normalizedRoomName = normalizeRoomNameForDomain(roomName, domain);
       const options = {
@@ -533,8 +548,8 @@ export function Meetings() {
           email: user?.email || '',
         },
         configOverwrite: {
-          startWithAudioMuted: false,
-          startWithVideoMuted: meetingType === 'phone',
+          startWithAudioMuted: audioMuted,
+          startWithVideoMuted: meetingType === 'phone' || videoMuted,
           enableLobby: false,
         },
         interfaceConfigOverwrite: {
@@ -544,16 +559,10 @@ export function Meetings() {
       };
 
       jitsiApiRef.current = new window.JitsiMeetExternalAPI(domain, options);
+      setMeetingControlsReady(true);
 
       jitsiApiRef.current.addListener('readyToClose', () => {
-        setInMeeting(false);
-        setAudioMuted(false);
-        setVideoMuted(false);
-        setBackgroundBlurred(false);
-        if (jitsiApiRef.current) {
-          jitsiApiRef.current.dispose();
-          jitsiApiRef.current = null;
-        }
+        leaveMeeting();
       });
 
       jitsiApiRef.current.addListener('audioMuteStatusChanged', (data: any) => {
@@ -563,26 +572,73 @@ export function Meetings() {
       jitsiApiRef.current.addListener('videoMuteStatusChanged', (data: any) => {
         setVideoMuted(data.muted);
       });
+
+      jitsiApiRef.current.addListener('videoConferenceJoined', () => {
+        if (backgroundBlurred && jitsiApiRef.current) {
+          try {
+            jitsiApiRef.current.executeCommand('setBlurredBackground', 'blur');
+          } catch (error) {
+            console.error('Error applying blur background:', error);
+          }
+        }
+      });
     } catch (error) {
       console.error('Error starting Jitsi meeting:', error);
       alert('Failed to start meeting. Please try again.');
+      setMeetingControlsReady(false);
       setInMeeting(false);
     }
   };
 
   const toggleBlurBackground = () => {
-    if (!jitsiApiRef.current) {
+    const nextBlurred = !backgroundBlurred;
+
+    if (!meetingControlsReady || !jitsiApiRef.current) {
+      setBackgroundBlurred(nextBlurred);
       return;
     }
 
     try {
-      const nextBlurred = !backgroundBlurred;
       jitsiApiRef.current.executeCommand('setBlurredBackground', nextBlurred ? 'blur' : '');
       setBackgroundBlurred(nextBlurred);
     } catch (error) {
       console.error('Error toggling blur background:', error);
       alert('Background blur is not available on this meeting server or browser.');
     }
+  };
+
+  const handleAudioToggle = () => {
+    if (!meetingControlsReady || !jitsiApiRef.current) {
+      setAudioMuted((current) => !current);
+      return;
+    }
+
+    jitsiApiRef.current.executeCommand('toggleAudio');
+  };
+
+  const handleVideoToggle = () => {
+    if (!meetingControlsReady || !jitsiApiRef.current) {
+      setVideoMuted((current) => !current);
+      return;
+    }
+
+    jitsiApiRef.current.executeCommand('toggleVideo');
+  };
+
+  const handleParticipantsToggle = () => {
+    if (!meetingControlsReady || !jitsiApiRef.current) {
+      return;
+    }
+
+    jitsiApiRef.current.executeCommand('toggleParticipantsPane');
+  };
+
+  const handleChatToggle = () => {
+    if (!meetingControlsReady || !jitsiApiRef.current) {
+      return;
+    }
+
+    jitsiApiRef.current.executeCommand('toggleChat');
   };
 
   const handleStartInstantMeeting = async () => {
@@ -704,6 +760,7 @@ export function Meetings() {
         jitsiApiRef.current.dispose();
         jitsiApiRef.current = null;
       }
+      setMeetingControlsReady(false);
       setBackgroundBlurred(false);
     };
   }, [activeMeetingType, inMeeting, selectedRoomName]);
@@ -858,13 +915,7 @@ export function Meetings() {
 
                 <div className="flex items-center justify-center gap-4 pt-4">
                   <button
-                    onClick={() => {
-                      if (jitsiApiRef.current) {
-                        const newMuted = !audioMuted;
-                        jitsiApiRef.current.executeCommand('toggleAudio');
-                        setAudioMuted(newMuted);
-                      }
-                    }}
+                    onClick={handleAudioToggle}
                     className="flex flex-col items-center gap-2 text-gray-300 hover:text-white transition-colors"
                     title="Toggle Audio"
                   >
@@ -875,13 +926,7 @@ export function Meetings() {
                     </div>
                   </button>
                   <button
-                    onClick={() => {
-                      if (jitsiApiRef.current) {
-                        const newMuted = !videoMuted;
-                        jitsiApiRef.current.executeCommand('toggleVideo');
-                        setVideoMuted(newMuted);
-                      }
-                    }}
+                    onClick={handleVideoToggle}
                     className="flex flex-col items-center gap-2 text-gray-300 hover:text-white transition-colors"
                     title="Toggle Video"
                   >
@@ -903,52 +948,71 @@ export function Meetings() {
                     </div>
                   </button>
                   <button
-                    onClick={() => {
-                      if (jitsiApiRef.current) {
-                        jitsiApiRef.current.executeCommand('toggleTileView');
-                      }
-                    }}
-                    className="flex flex-col items-center gap-2 text-gray-300 hover:text-white transition-colors"
-                    title="Toggle Participants View"
+                    type="button"
+                    onClick={handleParticipantsToggle}
+                    disabled={!meetingControlsReady}
+                    className={`flex flex-col items-center gap-2 transition-colors ${
+                      meetingControlsReady
+                        ? 'text-gray-300 hover:text-white'
+                        : 'cursor-not-allowed text-gray-500'
+                    }`}
+                    title={meetingControlsReady ? 'Toggle Participants' : 'Available after joining the meeting'}
                   >
-                    <div className="w-12 h-12 bg-gray-700 rounded-lg flex items-center justify-center hover:bg-gray-600 transition-colors">
+                    <div className={`w-12 h-12 rounded-lg flex items-center justify-center transition-colors ${
+                      meetingControlsReady
+                        ? 'bg-gray-700 hover:bg-gray-600'
+                        : 'bg-gray-800/70'
+                    }`}>
                       <Users className="w-5 h-5" />
                     </div>
                   </button>
                   <button
-                    onClick={() => {
-                      if (jitsiApiRef.current) {
-                        jitsiApiRef.current.executeCommand('toggleChat');
-                      }
-                    }}
-                    className="flex flex-col items-center gap-2 text-gray-300 hover:text-white transition-colors"
-                    title="Toggle Chat"
+                    type="button"
+                    onClick={handleChatToggle}
+                    disabled={!meetingControlsReady}
+                    className={`flex flex-col items-center gap-2 transition-colors ${
+                      meetingControlsReady
+                        ? 'text-gray-300 hover:text-white'
+                        : 'cursor-not-allowed text-gray-500'
+                    }`}
+                    title={meetingControlsReady ? 'Toggle Chat' : 'Available after joining the meeting'}
                   >
-                    <div className="w-12 h-12 bg-gray-700 rounded-lg flex items-center justify-center hover:bg-gray-600 transition-colors">
+                    <div className={`w-12 h-12 rounded-lg flex items-center justify-center transition-colors ${
+                      meetingControlsReady
+                        ? 'bg-gray-700 hover:bg-gray-600'
+                        : 'bg-gray-800/70'
+                    }`}>
                       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
                       </svg>
                     </div>
                   </button>
                   <button
-                    onClick={() => {
-                      if (jitsiApiRef.current) {
-                        jitsiApiRef.current.dispose();
-                        jitsiApiRef.current = null;
-                      }
-                      setInMeeting(false);
-                      setAudioMuted(false);
-                      setVideoMuted(false);
-                      setBackgroundBlurred(false);
-                    }}
-                    className="flex flex-col items-center gap-2 text-white hover:text-red-200 transition-colors"
-                    title="Leave Meeting"
+                    type="button"
+                    onClick={leaveMeeting}
+                    disabled={!meetingControlsReady}
+                    className={`flex flex-col items-center gap-2 transition-colors ${
+                      meetingControlsReady
+                        ? 'text-white hover:text-red-200'
+                        : 'cursor-not-allowed text-red-300/70'
+                    }`}
+                    title={meetingControlsReady ? 'Leave Meeting' : 'Available after joining the meeting'}
                   >
-                    <div className="w-12 h-12 bg-red-600 rounded-lg flex items-center justify-center hover:bg-red-700 transition-colors">
+                    <div className={`w-12 h-12 rounded-lg flex items-center justify-center transition-colors ${
+                      meetingControlsReady
+                        ? 'bg-red-600 hover:bg-red-700'
+                        : 'bg-red-900/40'
+                    }`}>
                       <Phone className="w-5 h-5 transform rotate-135" />
                     </div>
                   </button>
                 </div>
+
+                {!meetingControlsReady && (
+                  <p className="text-center text-xs text-gray-400">
+                    Mic, camera, and background settings will apply when the meeting starts. Chat, participants, and hang up become available after joining.
+                  </p>
+                )}
 
                 <div className="flex items-center justify-center gap-2 text-green-400 pt-4">
                   <div className="w-3 h-3 bg-green-400 rounded-full"></div>
@@ -972,13 +1036,7 @@ export function Meetings() {
                   </div>
                 </div>
                 <button
-                  onClick={() => {
-                    if (jitsiApiRef.current) {
-                      jitsiApiRef.current.dispose();
-                      jitsiApiRef.current = null;
-                    }
-                    setInMeeting(false);
-                  }}
+                  onClick={leaveMeeting}
                   className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
                 >
                   <Phone className="w-4 h-4 transform rotate-135" />
