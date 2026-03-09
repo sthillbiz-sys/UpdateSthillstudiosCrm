@@ -635,38 +635,61 @@ export function AgentDashboards() {
 
   const handleAgentLeadImportInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] || null;
-    if (!selectedAgentMeta?.userId) {
-      setLeadImportError('This employee is not linked to a login user yet.');
-      setLeadImportMessage('');
+    if (!selectedAgentMeta) {
       return;
     }
-    await handleLeadImport({
-      file,
-      assignToUserId: selectedAgentMeta.userId,
-      successLabel: `Imported {{count}} leads directly to ${selectedAgentMeta.full_name || 'this agent'}.`,
-      sourceName: file?.name || `${selectedAgentMeta?.full_name || 'agent'} BamLead import`,
-    });
+    await handleTargetAgentLeadImport(selectedAgentMeta.userId, selectedAgentMeta.full_name, file, '');
   };
 
   const handleAgentLeadImportDrop = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setAgentLeadImportDragActive(false);
-    if (!selectedAgentMeta?.userId) {
-      setLeadImportError('This employee is not linked to a login user yet.');
-      setLeadImportMessage('');
+    if (!selectedAgentMeta) {
       return;
     }
     const file = event.dataTransfer.files?.[0] || null;
     const rawText = event.dataTransfer.getData('text/plain');
-    const agentName = selectedAgentMeta?.full_name || 'this agent';
+    await handleTargetAgentLeadImport(selectedAgentMeta.userId, selectedAgentMeta.full_name, file, rawText);
+  };
+
+  const handleTargetAgentLeadImport = async (
+    targetUserId: string | null,
+    agentName: string,
+    file: File | null,
+    rawText: string,
+  ) => {
+    if (!targetUserId) {
+      setLeadImportError('This employee is not linked to a login user yet.');
+      setLeadImportMessage('');
+      return;
+    }
 
     await handleLeadImport({
       file,
       rawText,
-      assignToUserId: selectedAgentMeta.userId,
+      assignToUserId: targetUserId,
       sourceName: file?.name || `${agentName} BamLead drag import`,
       successLabel: `Imported {{count}} leads directly to ${agentName}.`,
     });
+  };
+
+  const handleAssigningAgentLeadImportInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] || null;
+    if (!assigningAgent) {
+      return;
+    }
+    await handleTargetAgentLeadImport(assigningAgent.userId, assigningAgent.full_name, file, '');
+  };
+
+  const handleAssigningAgentLeadImportDrop = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setAgentLeadImportDragActive(false);
+    if (!assigningAgent) {
+      return;
+    }
+    const file = event.dataTransfer.files?.[0] || null;
+    const rawText = event.dataTransfer.getData('text/plain');
+    await handleTargetAgentLeadImport(assigningAgent.userId, assigningAgent.full_name, file, rawText);
   };
 
   if (!isAdmin) {
@@ -1251,6 +1274,92 @@ export function AgentDashboards() {
               <div className="text-sm text-gray-600">
                 {selectedLeadIds.length} selected
               </div>
+            </div>
+
+            <div className="border-b border-gray-200 bg-slate-50 p-6">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-900">Import BamLead Leads</h3>
+                  <p className="mt-1 text-sm text-gray-600">
+                    Drop BamLead lead text, Excel, or PDF here to assign the imported leads directly to {assigningAgent.full_name}.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => agentLeadImportInputRef.current?.click()}
+                  disabled={uploadingLeadImport || !assigningAgent.userId}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  <Upload className="h-4 w-4" />
+                  {uploadingLeadImport ? 'Importing...' : 'Browse BamLead File'}
+                </button>
+              </div>
+
+              <input
+                ref={agentLeadImportInputRef}
+                type="file"
+                accept=".xlsx,.xls,.pdf"
+                onChange={(event) => {
+                  void handleAssigningAgentLeadImportInputChange(event);
+                }}
+                className="hidden"
+              />
+
+              <div
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  if (!uploadingLeadImport && assigningAgent.userId) {
+                    setAgentLeadImportDragActive(true);
+                  }
+                }}
+                onDragEnter={(event) => {
+                  event.preventDefault();
+                  if (!uploadingLeadImport && assigningAgent.userId) {
+                    setAgentLeadImportDragActive(true);
+                  }
+                }}
+                onDragLeave={(event) => {
+                  event.preventDefault();
+                  if (event.currentTarget === event.target) {
+                    setAgentLeadImportDragActive(false);
+                  }
+                }}
+                onDrop={(event) => {
+                  void handleAssigningAgentLeadImportDrop(event);
+                }}
+                className={`mt-4 rounded-xl border-2 border-dashed px-5 py-8 text-center transition-colors ${
+                  agentLeadImportDragActive
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-slate-300 bg-white'
+                } ${!assigningAgent.userId ? 'cursor-not-allowed opacity-60' : ''}`}
+              >
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
+                  <Upload className={`h-5 w-5 ${agentLeadImportDragActive ? 'text-blue-600' : 'text-slate-500'}`} />
+                </div>
+                <p className="mt-3 text-sm font-semibold text-slate-900">
+                  Drop BamLead leads, Excel, or PDF here
+                </p>
+                <p className="mt-1 text-xs text-gray-500">
+                  Supports direct drag text payloads plus `.xlsx`, `.xls`, and `.pdf` exports.
+                </p>
+                {!assigningAgent.userId && (
+                  <p className="mt-2 text-xs text-red-600">
+                    This employee is not linked to a login user, so imported leads cannot be assigned here yet.
+                  </p>
+                )}
+              </div>
+
+              {leadImportMessage && (
+                <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                  {leadImportMessage}
+                </div>
+              )}
+
+              {leadImportError && (
+                <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {leadImportError}
+                </div>
+              )}
             </div>
 
             <div className="max-h-[50vh] overflow-y-auto p-6 space-y-3 bg-gray-50">
