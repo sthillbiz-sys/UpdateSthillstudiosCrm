@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
-import { Plus, FolderKanban, Trash2, X } from 'lucide-react';
+import { Plus, FolderKanban, Pencil, Trash2, X } from 'lucide-react';
 
 interface Project {
   id: string;
@@ -16,9 +16,16 @@ export function Projects() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [creating, setCreating] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [newProject, setNewProject] = useState({
+    name: '',
+    description: '',
+    status: 'active',
+  });
+  const [editProject, setEditProject] = useState({
     name: '',
     description: '',
     status: 'active',
@@ -118,6 +125,51 @@ export function Projects() {
     }
   };
 
+  const openEditModal = (project: Project) => {
+    setEditingProject(project);
+    setEditProject({
+      name: project.name || '',
+      description: project.description || '',
+      status: String(project.status || 'active').toLowerCase(),
+    });
+  };
+
+  const closeEditModal = () => {
+    setEditingProject(null);
+    setEditProject({
+      name: '',
+      description: '',
+      status: 'active',
+    });
+  };
+
+  const handleEditProject = async () => {
+    if (!editingProject || !editProject.name.trim()) {
+      return;
+    }
+
+    setSavingEdit(true);
+    try {
+      const { error } = await supabase
+        .from('projects')
+        .update({
+          name: editProject.name.trim(),
+          description: editProject.description.trim() || null,
+          status: editProject.status,
+        })
+        .eq('id', editingProject.id);
+
+      if (error) throw error;
+
+      closeEditModal();
+      await loadProjects();
+    } catch (error) {
+      console.error('Error updating project:', error);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="p-8">
@@ -167,6 +219,13 @@ export function Projects() {
             </div>
 
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => openEditModal(project)}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm"
+              >
+                <Pencil className="w-4 h-4" />
+                Edit
+              </button>
               <button
                 onClick={() => handleToggleStatus(project)}
                 className="flex-1 flex items-center justify-center px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm"
@@ -270,6 +329,74 @@ export function Projects() {
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50"
               >
                 {creating ? 'Creating...' : 'Create'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingProject && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-lg shadow-xl">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-slate-900">Edit Project</h2>
+              <button
+                onClick={closeEditModal}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Project Name</label>
+                <input
+                  type="text"
+                  value={editProject.name}
+                  onChange={(e) => setEditProject((prev) => ({ ...prev, name: e.target.value }))}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Website Redesign"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
+                <textarea
+                  value={editProject.description}
+                  onChange={(e) => setEditProject((prev) => ({ ...prev, description: e.target.value }))}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  rows={4}
+                  placeholder="Short project summary"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Status</label>
+                <select
+                  value={editProject.status}
+                  onChange={(e) => setEditProject((prev) => ({ ...prev, status: e.target.value }))}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-end gap-2">
+              <button
+                onClick={closeEditModal}
+                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleEditProject}
+                disabled={savingEdit || !editProject.name.trim()}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50"
+              >
+                {savingEdit ? 'Saving...' : 'Save Changes'}
               </button>
             </div>
           </div>
