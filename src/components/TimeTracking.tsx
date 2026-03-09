@@ -52,6 +52,28 @@ export function TimeTracking() {
     return Number.isNaN(date.getTime()) ? null : date;
   };
 
+  const getElapsedShiftSeconds = (shift: ShiftEntry, nowMs: number) => {
+    const shiftStart = parseAppDate(shift.clock_in);
+    if (!shiftStart) {
+      return 0;
+    }
+
+    let elapsed = Math.floor((nowMs - shiftStart.getTime()) / 1000);
+
+    if (shift.lunch_duration_minutes) {
+      elapsed -= shift.lunch_duration_minutes * 60;
+    }
+
+    if (shift.status === 'on_lunch' && shift.lunch_start) {
+      const lunchStartDate = parseAppDate(shift.lunch_start);
+      if (lunchStartDate) {
+        elapsed -= Math.floor((nowMs - lunchStartDate.getTime()) / 1000);
+      }
+    }
+
+    return Math.max(0, elapsed);
+  };
+
   const formatDateCell = (value?: string) => {
     const date = parseAppDate(value);
     return date ? date.toLocaleDateString() : '-';
@@ -104,37 +126,28 @@ export function TimeTracking() {
   }, [user]);
 
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (activeShift && activeShift.status !== 'clocked_out') {
-      interval = setInterval(() => {
-        const shiftStart = parseAppDate(activeShift.clock_in);
-        if (!shiftStart) {
-          setElapsedTime(0);
-          return;
-        }
-        const start = shiftStart.getTime();
-        const now = Date.now();
-        let elapsed = Math.floor((now - start) / 1000);
+    let timeoutId: number | null = null;
 
-        if (activeShift.lunch_duration_minutes) {
-          elapsed -= activeShift.lunch_duration_minutes * 60;
-        }
-
-        if (activeShift.status === 'on_lunch' && activeShift.lunch_start) {
-          const lunchStartDate = parseAppDate(activeShift.lunch_start);
-          if (!lunchStartDate) {
-            setElapsedTime(Math.max(0, elapsed));
-            return;
-          }
-          const lunchStart = lunchStartDate.getTime();
-          const currentLunchDuration = Math.floor((now - lunchStart) / 1000);
-          elapsed -= currentLunchDuration;
-        }
-
-        setElapsedTime(Math.max(0, elapsed));
-      }, 1000);
+    if (!activeShift || activeShift.status === 'clocked_out') {
+      setElapsedTime(0);
+      return;
     }
-    return () => clearInterval(interval);
+
+    const tick = () => {
+      const now = Date.now();
+      setElapsedTime(getElapsedShiftSeconds(activeShift, now));
+
+      const nextDelay = 1000 - (now % 1000);
+      timeoutId = window.setTimeout(tick, nextDelay || 1000);
+    };
+
+    tick();
+
+    return () => {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
   }, [activeShift]);
 
   const loadShifts = async () => {
