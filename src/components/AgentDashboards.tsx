@@ -1235,9 +1235,9 @@ export function AgentDashboards() {
       )}
 
       {assigningAgent && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
-            <div className="border-b border-gray-200 p-6 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black bg-opacity-50 p-4 sm:items-center">
+          <div className="my-4 flex max-h-[calc(100vh-2rem)] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+            <div className="shrink-0 border-b border-gray-200 p-6 flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold text-slate-900">Assign Leads to {assigningAgent.full_name}</h2>
                 <p className="text-sm text-gray-600">
@@ -1256,163 +1256,165 @@ export function AgentDashboards() {
               </button>
             </div>
 
-            <div className="p-6 border-b border-gray-200 flex flex-col md:flex-row md:items-center gap-3">
-              <input
-                type="text"
-                value={leadSearch}
-                onChange={(event) => setLeadSearch(event.target.value)}
-                placeholder="Search leads by name, email, or source"
-                className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-              />
-              <button
-                onClick={toggleSelectAllFilteredLeads}
-                disabled={selectableFilteredLeadIds.length === 0}
-                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {allFilteredLeadsSelected ? 'Unselect Filtered' : 'Select Filtered'}
-              </button>
-              <div className="text-sm text-gray-600">
-                {selectedLeadIds.length} selected
-              </div>
-            </div>
-
-            <div className="border-b border-gray-200 bg-slate-50 p-6">
-              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <h3 className="text-base font-semibold text-slate-900">Import BamLead Leads</h3>
-                  <p className="mt-1 text-sm text-gray-600">
-                    Drop BamLead lead text, Excel, or PDF here to assign the imported leads directly to {assigningAgent.full_name}.
-                  </p>
-                </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="border-b border-gray-200 p-6 flex flex-col gap-3 md:flex-row md:items-center">
+                <input
+                  type="text"
+                  value={leadSearch}
+                  onChange={(event) => setLeadSearch(event.target.value)}
+                  placeholder="Search leads by name, email, or source"
+                  className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                />
                 <button
-                  type="button"
-                  onClick={() => agentLeadImportInputRef.current?.click()}
-                  disabled={uploadingLeadImport || !assigningAgent.userId}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  onClick={toggleSelectAllFilteredLeads}
+                  disabled={selectableFilteredLeadIds.length === 0}
+                  className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <Upload className="h-4 w-4" />
-                  {uploadingLeadImport ? 'Importing...' : 'Browse BamLead File'}
+                  {allFilteredLeadsSelected ? 'Unselect Filtered' : 'Select Filtered'}
                 </button>
+                <div className="text-sm text-gray-600">
+                  {selectedLeadIds.length} selected
+                </div>
               </div>
 
-              <input
-                ref={agentLeadImportInputRef}
-                type="file"
-                accept=".xlsx,.xls,.pdf"
-                onChange={(event) => {
-                  void handleAssigningAgentLeadImportInputChange(event);
-                }}
-                className="hidden"
-              />
-
-              <div
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  if (!uploadingLeadImport && assigningAgent.userId) {
-                    setAgentLeadImportDragActive(true);
-                  }
-                }}
-                onDragEnter={(event) => {
-                  event.preventDefault();
-                  if (!uploadingLeadImport && assigningAgent.userId) {
-                    setAgentLeadImportDragActive(true);
-                  }
-                }}
-                onDragLeave={(event) => {
-                  event.preventDefault();
-                  if (event.currentTarget === event.target) {
-                    setAgentLeadImportDragActive(false);
-                  }
-                }}
-                onDrop={(event) => {
-                  void handleAssigningAgentLeadImportDrop(event);
-                }}
-                className={`mt-4 rounded-xl border-2 border-dashed px-5 py-8 text-center transition-colors ${
-                  agentLeadImportDragActive
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-slate-300 bg-white'
-                } ${!assigningAgent.userId ? 'cursor-not-allowed opacity-60' : ''}`}
-              >
-                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
-                  <Upload className={`h-5 w-5 ${agentLeadImportDragActive ? 'text-blue-600' : 'text-slate-500'}`} />
+              <div className="border-b border-gray-200 bg-slate-50 p-6">
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-900">Import BamLead Leads</h3>
+                    <p className="mt-1 text-sm text-gray-600">
+                      Drop BamLead lead text, Excel, or PDF here to assign the imported leads directly to {assigningAgent.full_name}.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => agentLeadImportInputRef.current?.click()}
+                    disabled={uploadingLeadImport || !assigningAgent.userId}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    <Upload className="h-4 w-4" />
+                    {uploadingLeadImport ? 'Importing...' : 'Browse BamLead File'}
+                  </button>
                 </div>
-                <p className="mt-3 text-sm font-semibold text-slate-900">
-                  Drop BamLead leads, Excel, or PDF here
-                </p>
-                <p className="mt-1 text-xs text-gray-500">
-                  Supports direct drag text payloads plus `.xlsx`, `.xls`, and `.pdf` exports.
-                </p>
-                {!assigningAgent.userId && (
-                  <p className="mt-2 text-xs text-red-600">
-                    This employee is not linked to a login user, so imported leads cannot be assigned here yet.
+
+                <input
+                  ref={agentLeadImportInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.pdf"
+                  onChange={(event) => {
+                    void handleAssigningAgentLeadImportInputChange(event);
+                  }}
+                  className="hidden"
+                />
+
+                <div
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    if (!uploadingLeadImport && assigningAgent.userId) {
+                      setAgentLeadImportDragActive(true);
+                    }
+                  }}
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    if (!uploadingLeadImport && assigningAgent.userId) {
+                      setAgentLeadImportDragActive(true);
+                    }
+                  }}
+                  onDragLeave={(event) => {
+                    event.preventDefault();
+                    if (event.currentTarget === event.target) {
+                      setAgentLeadImportDragActive(false);
+                    }
+                  }}
+                  onDrop={(event) => {
+                    void handleAssigningAgentLeadImportDrop(event);
+                  }}
+                  className={`mt-4 rounded-xl border-2 border-dashed px-5 py-8 text-center transition-colors ${
+                    agentLeadImportDragActive
+                      ? 'border-blue-500 bg-blue-50'
+                      : 'border-slate-300 bg-white'
+                  } ${!assigningAgent.userId ? 'cursor-not-allowed opacity-60' : ''}`}
+                >
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
+                    <Upload className={`h-5 w-5 ${agentLeadImportDragActive ? 'text-blue-600' : 'text-slate-500'}`} />
+                  </div>
+                  <p className="mt-3 text-sm font-semibold text-slate-900">
+                    Drop BamLead leads, Excel, or PDF here
                   </p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Supports direct drag text payloads plus `.xlsx`, `.xls`, and `.pdf` exports.
+                  </p>
+                  {!assigningAgent.userId && (
+                    <p className="mt-2 text-xs text-red-600">
+                      This employee is not linked to a login user, so imported leads cannot be assigned here yet.
+                    </p>
+                  )}
+                </div>
+
+                {leadImportMessage && (
+                  <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                    {leadImportMessage}
+                  </div>
+                )}
+
+                {leadImportError && (
+                  <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    {leadImportError}
+                  </div>
                 )}
               </div>
 
-              {leadImportMessage && (
-                <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-                  {leadImportMessage}
-                </div>
-              )}
+              <div className="bg-gray-50 p-6 space-y-3">
+                {loadingAssignableLeads && (
+                  <div className="text-sm text-gray-500">Loading leads...</div>
+                )}
 
-              {leadImportError && (
-                <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                  {leadImportError}
-                </div>
-              )}
-            </div>
+                {!loadingAssignableLeads && filteredAssignableLeads.length === 0 && (
+                  <div className="rounded-lg border border-dashed border-gray-300 bg-white p-6 text-center text-sm text-gray-500">
+                    No leads match your search.
+                  </div>
+                )}
 
-            <div className="max-h-[50vh] overflow-y-auto p-6 space-y-3 bg-gray-50">
-              {loadingAssignableLeads && (
-                <div className="text-sm text-gray-500">Loading leads...</div>
-              )}
-
-              {!loadingAssignableLeads && filteredAssignableLeads.length === 0 && (
-                <div className="rounded-lg border border-dashed border-gray-300 bg-white p-6 text-center text-sm text-gray-500">
-                  No leads match your search.
-                </div>
-              )}
-
-              {!loadingAssignableLeads && filteredAssignableLeads.map((lead) => {
-                const alreadyAssignedHere = lead.assignedTo === assigningAgent.userId;
-                return (
-                  <label
-                    key={lead.id}
-                    className={`flex items-start gap-3 rounded-lg border p-4 transition-colors ${
-                      alreadyAssignedHere ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-white hover:border-gray-300'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedLeadIds.includes(lead.id)}
-                      onChange={() => toggleSelectedLead(lead.id)}
-                      disabled={alreadyAssignedHere}
-                      className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                        <div>
-                          <p className="font-medium text-slate-900">{lead.name}</p>
-                          <p className="text-sm text-gray-500">{lead.email || 'No email provided'}</p>
-                        </div>
-                        <div className="flex items-center gap-2 text-xs">
-                          <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600 uppercase">
-                            {lead.source || 'manual'}
-                          </span>
-                          <span className={`rounded-full px-2 py-1 ${
-                            alreadyAssignedHere ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
-                          }`}>
-                            {alreadyAssignedHere ? 'Already assigned here' : lead.assignedTo ? 'Assigned elsewhere' : 'Unassigned'}
-                          </span>
+                {!loadingAssignableLeads && filteredAssignableLeads.map((lead) => {
+                  const alreadyAssignedHere = lead.assignedTo === assigningAgent.userId;
+                  return (
+                    <label
+                      key={lead.id}
+                      className={`flex items-start gap-3 rounded-lg border p-4 transition-colors ${
+                        alreadyAssignedHere ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-white hover:border-gray-300'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedLeadIds.includes(lead.id)}
+                        onChange={() => toggleSelectedLead(lead.id)}
+                        disabled={alreadyAssignedHere}
+                        className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <p className="font-medium text-slate-900">{lead.name}</p>
+                            <p className="text-sm text-gray-500">{lead.email || 'No email provided'}</p>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600 uppercase">
+                              {lead.source || 'manual'}
+                            </span>
+                            <span className={`rounded-full px-2 py-1 ${
+                              alreadyAssignedHere ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
+                            }`}>
+                              {alreadyAssignedHere ? 'Already assigned here' : lead.assignedTo ? 'Assigned elsewhere' : 'Unassigned'}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </label>
-                );
-              })}
+                    </label>
+                  );
+                })}
+              </div>
             </div>
 
-            <div className="border-t border-gray-200 p-6 flex items-center justify-between gap-3">
+            <div className="shrink-0 border-t border-gray-200 bg-white p-6 flex items-center justify-between gap-3">
               <button
                 onClick={() => {
                   setAssigningAgentId(null);
