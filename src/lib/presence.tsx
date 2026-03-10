@@ -10,6 +10,7 @@ export interface UserPresence {
   status: PresenceStatus;
   custom_message: string;
   is_on_call: boolean;
+  active_caller_number?: string | null;
   last_activity: string;
   employee?: {
     id?: number | null;
@@ -26,7 +27,7 @@ type PresenceContextType = {
   myPresence: UserPresence | null;
   teamPresence: UserPresence[];
   updatePresence: (status: PresenceStatus, customMessage?: string) => Promise<void>;
-  setOnCall: (isOnCall: boolean) => Promise<void>;
+  setOnCall: (isOnCall: boolean, activeCallerNumber?: string | null) => Promise<void>;
   refreshPresence: () => Promise<void>;
 };
 
@@ -60,6 +61,7 @@ function mapPresenceRow(row: any): UserPresence {
     status: normalizePresenceStatus(row?.status || 'offline'),
     custom_message: String(row?.custom_message || ''),
     is_on_call: Boolean(row?.is_on_call),
+    active_caller_number: row?.active_caller_number ? String(row.active_caller_number) : null,
     last_activity: row?.last_activity || row?.last_seen || new Date().toISOString(),
     employee: {
       id: row?.employee?.id ? Number(row.employee.id) : null,
@@ -113,12 +115,13 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
   }, [myPresence]);
 
   const sendHeartbeat = useCallback(
-    async (status: PresenceStatus, customMessage: string, isOnCall: boolean) => {
+    async (status: PresenceStatus, customMessage: string, isOnCall: boolean, activeCallerNumber?: string | null) => {
       if (!user) return;
       await apiPost('/presence/heartbeat', {
         status,
         custom_message: customMessage,
         is_on_call: isOnCall,
+        active_caller_number: isOnCall ? String(activeCallerNumber || '').trim() || null : null,
       });
     },
     [user],
@@ -151,6 +154,7 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
           status: 'available',
           custom_message: '',
           is_on_call: false,
+          active_caller_number: null,
           last_activity: new Date().toISOString(),
           employee: {
             full_name: user.name,
@@ -168,6 +172,7 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
         status: 'available',
         custom_message: '',
         is_on_call: false,
+        active_caller_number: null,
         last_activity: new Date().toISOString(),
         employee: {
           full_name: user.name,
@@ -206,7 +211,12 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
       const status = normalizePresenceStatus(current?.status || 'available');
       const customMessage = current?.custom_message || '';
       const isOnCall = Boolean(current?.is_on_call);
-      void sendHeartbeat(status === 'offline' ? 'away' : status, customMessage, isOnCall);
+      void sendHeartbeat(
+        status === 'offline' ? 'away' : status,
+        customMessage,
+        isOnCall,
+        current?.active_caller_number || null,
+      );
     }, HEARTBEAT_INTERVAL_MS);
 
     const refreshId = window.setInterval(() => {
@@ -216,7 +226,12 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
     const onFocus = () => {
       const current = myPresenceRef.current;
       const status = normalizePresenceStatus(current?.status || 'available');
-      void sendHeartbeat(status === 'offline' ? 'away' : status, current?.custom_message || '', Boolean(current?.is_on_call))
+      void sendHeartbeat(
+        status === 'offline' ? 'away' : status,
+        current?.custom_message || '',
+        Boolean(current?.is_on_call),
+        current?.active_caller_number || null,
+      )
         .then(() => refreshPresence())
         .catch(() => {
           void refreshPresence();
@@ -251,6 +266,7 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
         status: normalizedStatus,
         custom_message: customMessage,
         is_on_call: Boolean(myPresenceRef.current?.is_on_call),
+        active_caller_number: myPresenceRef.current?.active_caller_number || null,
         last_activity: new Date().toISOString(),
         employee: myPresenceRef.current?.employee || {
           full_name: user.name,
@@ -263,7 +279,12 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
       myPresenceRef.current = next;
 
       try {
-        await sendHeartbeat(normalizedStatus === 'offline' ? 'away' : normalizedStatus, customMessage, next.is_on_call);
+        await sendHeartbeat(
+          normalizedStatus === 'offline' ? 'away' : normalizedStatus,
+          customMessage,
+          next.is_on_call,
+          next.active_caller_number || null,
+        );
       } finally {
         await refreshPresence();
       }
@@ -272,7 +293,7 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
   );
 
   const setOnCall = useCallback(
-    async (isOnCall: boolean) => {
+    async (isOnCall: boolean, activeCallerNumber: string | null = null) => {
       if (!user) return;
       const current = myPresenceRef.current;
       const nextStatus = isOnCall
@@ -287,6 +308,7 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
         status: nextStatus,
         custom_message: current?.custom_message || '',
         is_on_call: isOnCall,
+        active_caller_number: isOnCall ? String(activeCallerNumber || '').trim() || null : null,
         last_activity: new Date().toISOString(),
         employee: current?.employee || {
           full_name: user.name,
@@ -299,7 +321,7 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
       myPresenceRef.current = next;
 
       try {
-        await sendHeartbeat(nextStatus, next.custom_message, isOnCall);
+        await sendHeartbeat(nextStatus, next.custom_message, isOnCall, next.active_caller_number || null);
       } finally {
         await refreshPresence();
       }

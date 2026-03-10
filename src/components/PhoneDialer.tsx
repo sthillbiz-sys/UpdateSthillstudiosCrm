@@ -193,6 +193,50 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
   }, []);
 
   const hasMultipleCallerNumbers = callerNumbers.length > 1;
+  const currentUserEmail = String(user?.email || '').trim().toLowerCase();
+  const unavailableCallerNumbers = useMemo(() => {
+    const active = new Set<string>();
+
+    for (const member of teamPresence) {
+      const memberEmail = String(member.employee?.email || '').trim().toLowerCase();
+      if ((member.user_id > 0 && member.user_id === user?.id) || (memberEmail !== '' && memberEmail === currentUserEmail)) {
+        continue;
+      }
+
+      const callerNumber = String(member.active_caller_number || '').trim();
+      if (member.is_on_call && callerNumber !== '') {
+        active.add(callerNumber);
+      }
+    }
+
+    return active;
+  }, [currentUserEmail, teamPresence, user?.id]);
+  const selectedCallerNumberUnavailable = selectedCallerNumber !== '' && unavailableCallerNumbers.has(selectedCallerNumber);
+  const availableCallerNumbers = useMemo(
+    () => callerNumbers.filter((number) => !unavailableCallerNumbers.has(number)),
+    [callerNumbers, unavailableCallerNumbers],
+  );
+
+  useEffect(() => {
+    if (callerNumbers.length === 0 || isInCall) {
+      return;
+    }
+
+    if (selectedCallerNumber !== '' && !unavailableCallerNumbers.has(selectedCallerNumber)) {
+      return;
+    }
+
+    const nextAvailable = availableCallerNumbers[0] || '';
+    if (nextAvailable !== '' && nextAvailable !== selectedCallerNumber) {
+      setSelectedCallerNumber(nextAvailable);
+      setDialerMessage(`Caller ID ${selectedCallerNumber || 'selection'} is in use. Switched to ${nextAvailable}.`);
+      return;
+    }
+
+    if (nextAvailable === '' && selectedCallerNumber !== '') {
+      setDialerMessage(`Caller ID ${selectedCallerNumber} is currently in use by another employee.`);
+    }
+  }, [availableCallerNumbers, callerNumbers.length, isInCall, selectedCallerNumber, unavailableCallerNumbers]);
 
   const finalizeAndLogCall = useCallback(
     async (finalTelnyxState: string) => {
@@ -223,7 +267,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       resetCallUiState();
 
       try {
-        await setOnCall(false);
+        await setOnCall(false, null);
       } catch (error) {
         console.error('Error resetting presence after call:', error);
       }
@@ -266,7 +310,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
         }
         setCallState('active');
         setDialerMessage('Call in progress');
-        void setOnCall(true);
+        void setOnCall(true, selectedCallerNumber);
         return;
       }
 
@@ -274,7 +318,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
         void finalizeAndLogCall(state);
       }
     },
-    [finalizeAndLogCall, setOnCall],
+    [finalizeAndLogCall, selectedCallerNumber, setOnCall],
   );
 
   const initializeDialer = useCallback(async () => {
@@ -378,7 +422,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       }
 
       resetCallUiState();
-      void setOnCall(false);
+      void setOnCall(false, null);
     };
   }, [initializeDialer, loadCallHistory, resetCallUiState, setOnCall]);
 
@@ -403,6 +447,10 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       setDialerMessage('Select a caller ID before placing a call.');
       return;
     }
+    if (selectedCallerNumberUnavailable) {
+      setDialerMessage(`Caller ID ${selectedCallerNumber} is already in use by another employee.`);
+      return;
+    }
 
     try {
       dialedNumberRef.current = destination;
@@ -412,7 +460,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       setCallState('dialing');
       setDialerMessage('Placing call...');
 
-      await setOnCall(true);
+      await setOnCall(true, selectedCallerNumber);
       await updatePresence('busy');
 
       const call = client.newCall({
@@ -427,10 +475,10 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       console.error('Error starting Telnyx call:', error);
       setCallState('idle');
       setDialerMessage(error instanceof Error ? error.message : 'Failed to start call.');
-      void setOnCall(false);
+      void setOnCall(false, null);
       void updatePresence('available');
     }
-  }, [connectionState, phoneNumber, selectedCallerNumber, setOnCall, updatePresence]);
+  }, [connectionState, phoneNumber, selectedCallerNumber, selectedCallerNumberUnavailable, setOnCall, updatePresence]);
 
   const hangupCall = useCallback(() => {
     const call = activeCallRef.current;
@@ -533,7 +581,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
     }
   };
 
-  const callButtonDisabled = !isInCall && (!isCallableNumber || connectionState !== 'ready');
+  const callButtonDisabled = !isInCall && (!isCallableNumber || connectionState !== 'ready' || selectedCallerNumberUnavailable || availableCallerNumbers.length === 0);
 
   if (onClose) {
     return (
@@ -678,11 +726,16 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
                   className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs text-white outline-none transition focus:border-cyan-500 disabled:cursor-not-allowed disabled:opacity-70"
                 >
                   {callerNumbers.map((number) => (
-                    <option key={number} value={number}>
-                      {hasMultipleCallerNumbers ? `Use ${number}` : number}
+                    <option key={number} value={number} disabled={unavailableCallerNumbers.has(number)}>
+                      {hasMultipleCallerNumbers ? `Use ${number}` : number}{unavailableCallerNumbers.has(number) ? ' (In use)' : ''}
                     </option>
                   ))}
                 </select>
+                {selectedCallerNumberUnavailable && (
+                  <p className="mt-2 text-[11px] text-amber-300">
+                    {selectedCallerNumber} is currently being used by another employee.
+                  </p>
+                )}
               </div>
             )}
 
@@ -853,11 +906,16 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
                   className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none transition focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-70"
                 >
                   {callerNumbers.map((number) => (
-                    <option key={number} value={number}>
-                      {number}
+                    <option key={number} value={number} disabled={unavailableCallerNumbers.has(number)}>
+                      {number}{unavailableCallerNumbers.has(number) ? ' (In use)' : ''}
                     </option>
                   ))}
                 </select>
+                {selectedCallerNumberUnavailable && (
+                  <p className="mt-2 text-xs text-amber-300">
+                    {selectedCallerNumber} is currently being used by another employee.
+                  </p>
+                )}
               </div>
             )}
 

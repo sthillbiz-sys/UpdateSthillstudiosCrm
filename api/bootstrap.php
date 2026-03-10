@@ -537,6 +537,7 @@ function ensure_runtime_schema(): void {
             status VARCHAR(32) NOT NULL DEFAULT "available",
             custom_message TEXT NULL,
             is_on_call TINYINT(1) NOT NULL DEFAULT 0,
+            active_caller_number VARCHAR(32) NULL,
             last_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             last_offline_at DATETIME NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -547,6 +548,7 @@ function ensure_runtime_schema(): void {
             INDEX user_presence_last_seen_idx (last_seen)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
     );
+    ensure_table_column_exists($pdo, 'user_presence', 'active_caller_number', 'VARCHAR(32) NULL AFTER is_on_call');
 
     $pdo->exec(
         'CREATE TABLE IF NOT EXISTS activities (
@@ -626,6 +628,22 @@ function ensure_runtime_schema(): void {
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
     );
+}
+
+function ensure_table_column_exists(PDO $pdo, string $table, string $column, string $definition): void {
+    $stmt = $pdo->prepare(sprintf('SHOW COLUMNS FROM `%s` LIKE ?', str_replace('`', '``', $table)));
+    $stmt->execute([$column]);
+    $exists = $stmt->fetch();
+    if ($exists !== false) {
+        return;
+    }
+
+    $pdo->exec(sprintf(
+        'ALTER TABLE `%s` ADD COLUMN `%s` %s',
+        str_replace('`', '``', $table),
+        str_replace('`', '``', $column),
+        $definition
+    ));
 }
 
 function normalize_presence_status(?string $value): string {

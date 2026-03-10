@@ -369,6 +369,7 @@ try {
                 p.status,
                 p.custom_message,
                 p.is_on_call,
+                p.active_caller_number,
                 p.last_seen,
                 p.last_offline_at,
                 p.updated_at,
@@ -407,6 +408,7 @@ try {
                 'status' => $status,
                 'custom_message' => (string) ($row['custom_message'] ?? ''),
                 'is_on_call' => ((int) ($row['is_on_call'] ?? 0)) === 1,
+                'active_caller_number' => trim((string) ($row['active_caller_number'] ?? '')) ?: null,
                 'last_activity' => (string) ($row['last_seen'] ?? ''),
                 'last_seen' => (string) ($row['last_seen'] ?? ''),
                 'is_online' => $online,
@@ -443,6 +445,10 @@ try {
         } else {
             $isOnCall = in_array(strtolower((string) $isOnCallInput), ['1', 'true', 'yes', 'on'], true);
         }
+        $activeCallerNumber = telnyx_normalize_phone_number((string) ($input['active_caller_number'] ?? ''));
+        if (!$isOnCall) {
+            $activeCallerNumber = '';
+        }
 
         $presenceName = trim((string) ($authUser['name'] ?? ''));
         if ($presenceName === '') {
@@ -456,8 +462,8 @@ try {
 
         $stmt = db()->prepare(
             'INSERT INTO user_presence (
-                user_id, email, name, role, status, custom_message, is_on_call, last_seen, last_offline_at, created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NULL, NOW(), NOW())
+                user_id, email, name, role, status, custom_message, is_on_call, active_caller_number, last_seen, last_offline_at, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NULL, NOW(), NOW())
              ON DUPLICATE KEY UPDATE
                 email = VALUES(email),
                 name = VALUES(name),
@@ -465,6 +471,7 @@ try {
                 status = VALUES(status),
                 custom_message = VALUES(custom_message),
                 is_on_call = VALUES(is_on_call),
+                active_caller_number = VALUES(active_caller_number),
                 last_seen = NOW(),
                 last_offline_at = NULL,
                 updated_at = NOW()'
@@ -477,6 +484,7 @@ try {
             $status,
             $customMessage !== '' ? $customMessage : null,
             $isOnCall ? 1 : 0,
+            $activeCallerNumber !== '' ? $activeCallerNumber : null,
         ]);
 
         json_response(['success' => true]);
@@ -495,8 +503,8 @@ try {
 
         $stmt = db()->prepare(
             'INSERT INTO user_presence (
-                user_id, email, name, role, status, custom_message, is_on_call, last_seen, last_offline_at, created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), NOW())
+                user_id, email, name, role, status, custom_message, is_on_call, active_caller_number, last_seen, last_offline_at, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NOW(), NOW(), NOW(), NOW())
              ON DUPLICATE KEY UPDATE
                 email = VALUES(email),
                 name = VALUES(name),
@@ -504,6 +512,7 @@ try {
                 status = VALUES(status),
                 custom_message = NULL,
                 is_on_call = 0,
+                active_caller_number = NULL,
                 last_offline_at = NOW(),
                 updated_at = NOW()'
         );
