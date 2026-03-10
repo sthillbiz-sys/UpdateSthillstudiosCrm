@@ -360,6 +360,7 @@ try {
 
     if ($route === 'presence' && $method === 'GET') {
         collapse_duplicate_employee_rows();
+        $supportsActiveCallerNumber = user_presence_supports_active_caller_number();
         $stmt = db()->query(
             'SELECT
                 p.user_id,
@@ -369,7 +370,7 @@ try {
                 p.status,
                 p.custom_message,
                 p.is_on_call,
-                p.active_caller_number,
+                ' . ($supportsActiveCallerNumber ? 'p.active_caller_number' : 'NULL AS active_caller_number') . ',
                 p.last_seen,
                 p.last_offline_at,
                 p.updated_at,
@@ -460,32 +461,59 @@ try {
             json_response(['error' => 'Invalid auth context'], 401);
         }
 
-        $stmt = db()->prepare(
-            'INSERT INTO user_presence (
-                user_id, email, name, role, status, custom_message, is_on_call, active_caller_number, last_seen, last_offline_at, created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NULL, NOW(), NOW())
-             ON DUPLICATE KEY UPDATE
-                email = VALUES(email),
-                name = VALUES(name),
-                role = VALUES(role),
-                status = VALUES(status),
-                custom_message = VALUES(custom_message),
-                is_on_call = VALUES(is_on_call),
-                active_caller_number = VALUES(active_caller_number),
-                last_seen = NOW(),
-                last_offline_at = NULL,
-                updated_at = NOW()'
-        );
-        $stmt->execute([
-            $authUserId,
-            $presenceEmail,
-            $presenceName,
-            $presenceRole,
-            $status,
-            $customMessage !== '' ? $customMessage : null,
-            $isOnCall ? 1 : 0,
-            $activeCallerNumber !== '' ? $activeCallerNumber : null,
-        ]);
+        if (user_presence_supports_active_caller_number()) {
+            $stmt = db()->prepare(
+                'INSERT INTO user_presence (
+                    user_id, email, name, role, status, custom_message, is_on_call, active_caller_number, last_seen, last_offline_at, created_at, updated_at
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NULL, NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE
+                    email = VALUES(email),
+                    name = VALUES(name),
+                    role = VALUES(role),
+                    status = VALUES(status),
+                    custom_message = VALUES(custom_message),
+                    is_on_call = VALUES(is_on_call),
+                    active_caller_number = VALUES(active_caller_number),
+                    last_seen = NOW(),
+                    last_offline_at = NULL,
+                    updated_at = NOW()'
+            );
+            $stmt->execute([
+                $authUserId,
+                $presenceEmail,
+                $presenceName,
+                $presenceRole,
+                $status,
+                $customMessage !== '' ? $customMessage : null,
+                $isOnCall ? 1 : 0,
+                $activeCallerNumber !== '' ? $activeCallerNumber : null,
+            ]);
+        } else {
+            $stmt = db()->prepare(
+                'INSERT INTO user_presence (
+                    user_id, email, name, role, status, custom_message, is_on_call, last_seen, last_offline_at, created_at, updated_at
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NULL, NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE
+                    email = VALUES(email),
+                    name = VALUES(name),
+                    role = VALUES(role),
+                    status = VALUES(status),
+                    custom_message = VALUES(custom_message),
+                    is_on_call = VALUES(is_on_call),
+                    last_seen = NOW(),
+                    last_offline_at = NULL,
+                    updated_at = NOW()'
+            );
+            $stmt->execute([
+                $authUserId,
+                $presenceEmail,
+                $presenceName,
+                $presenceRole,
+                $status,
+                $customMessage !== '' ? $customMessage : null,
+                $isOnCall ? 1 : 0,
+            ]);
+        }
 
         json_response(['success' => true]);
     }
@@ -501,30 +529,56 @@ try {
             json_response(['error' => 'Invalid auth context'], 401);
         }
 
-        $stmt = db()->prepare(
-            'INSERT INTO user_presence (
-                user_id, email, name, role, status, custom_message, is_on_call, active_caller_number, last_seen, last_offline_at, created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NOW(), NOW(), NOW(), NOW())
-             ON DUPLICATE KEY UPDATE
-                email = VALUES(email),
-                name = VALUES(name),
-                role = VALUES(role),
-                status = VALUES(status),
-                custom_message = NULL,
-                is_on_call = 0,
-                active_caller_number = NULL,
-                last_offline_at = NOW(),
-                updated_at = NOW()'
-        );
-        $stmt->execute([
-            $authUserId,
-            $presenceEmail,
-            $presenceName,
-            $presenceRole,
-            'offline',
-            null,
-            0,
-        ]);
+        if (user_presence_supports_active_caller_number()) {
+            $stmt = db()->prepare(
+                'INSERT INTO user_presence (
+                    user_id, email, name, role, status, custom_message, is_on_call, active_caller_number, last_seen, last_offline_at, created_at, updated_at
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NOW(), NOW(), NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE
+                    email = VALUES(email),
+                    name = VALUES(name),
+                    role = VALUES(role),
+                    status = VALUES(status),
+                    custom_message = NULL,
+                    is_on_call = 0,
+                    active_caller_number = NULL,
+                    last_offline_at = NOW(),
+                    updated_at = NOW()'
+            );
+            $stmt->execute([
+                $authUserId,
+                $presenceEmail,
+                $presenceName,
+                $presenceRole,
+                'offline',
+                null,
+                0,
+            ]);
+        } else {
+            $stmt = db()->prepare(
+                'INSERT INTO user_presence (
+                    user_id, email, name, role, status, custom_message, is_on_call, last_seen, last_offline_at, created_at, updated_at
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE
+                    email = VALUES(email),
+                    name = VALUES(name),
+                    role = VALUES(role),
+                    status = VALUES(status),
+                    custom_message = NULL,
+                    is_on_call = 0,
+                    last_offline_at = NOW(),
+                    updated_at = NOW()'
+            );
+            $stmt->execute([
+                $authUserId,
+                $presenceEmail,
+                $presenceName,
+                $presenceRole,
+                'offline',
+                null,
+                0,
+            ]);
+        }
 
         json_response(['success' => true]);
     }

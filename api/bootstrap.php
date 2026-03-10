@@ -630,20 +630,55 @@ function ensure_runtime_schema(): void {
     );
 }
 
-function ensure_table_column_exists(PDO $pdo, string $table, string $column, string $definition): void {
-    $stmt = $pdo->prepare(sprintf('SHOW COLUMNS FROM `%s` LIKE ?', str_replace('`', '``', $table)));
-    $stmt->execute([$column]);
-    $exists = $stmt->fetch();
-    if ($exists !== false) {
-        return;
+function table_column_exists(PDO $pdo, string $table, string $column): bool {
+    try {
+        $stmt = $pdo->query(sprintf('SHOW COLUMNS FROM `%s`', str_replace('`', '``', $table)));
+        $rows = $stmt->fetchAll();
+    } catch (Throwable $e) {
+        return false;
     }
 
-    $pdo->exec(sprintf(
-        'ALTER TABLE `%s` ADD COLUMN `%s` %s',
-        str_replace('`', '``', $table),
-        str_replace('`', '``', $column),
-        $definition
-    ));
+    foreach ($rows as $row) {
+        if (strcasecmp((string) ($row['Field'] ?? ''), $column) === 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function ensure_table_column_exists(PDO $pdo, string $table, string $column, string $definition): bool {
+    if (table_column_exists($pdo, $table, $column)) {
+        return true;
+    }
+
+    try {
+        $pdo->exec(sprintf(
+            'ALTER TABLE `%s` ADD COLUMN `%s` %s',
+            str_replace('`', '``', $table),
+            str_replace('`', '``', $column),
+            $definition
+        ));
+    } catch (Throwable $e) {
+        return false;
+    }
+
+    return table_column_exists($pdo, $table, $column);
+}
+
+function user_presence_supports_active_caller_number(): bool {
+    static $supported = null;
+    if ($supported !== null) {
+        return $supported;
+    }
+
+    try {
+        $supported = table_column_exists(db(), 'user_presence', 'active_caller_number');
+    } catch (Throwable $e) {
+        $supported = false;
+    }
+
+    return $supported;
 }
 
 function normalize_presence_status(?string $value): string {
