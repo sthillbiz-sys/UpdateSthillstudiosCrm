@@ -1922,12 +1922,15 @@ try {
         if ($name === '') {
             json_response(['error' => 'Lead name is required'], 400);
         }
-        $stmt = db()->prepare('INSERT INTO leads (name, email, phone, source, created_by_user_id) VALUES (?, ?, ?, ?, ?)');
+        $stmt = db()->prepare('INSERT INTO leads (name, email, phone, source, company_name, business_address, notes, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([
             $name,
             trim((string) ($input['email'] ?? '')),
             trim((string) ($input['phone'] ?? '')),
             trim((string) ($input['source'] ?? 'manual')) ?: 'manual',
+            trim((string) ($input['company_name'] ?? '')) ?: null,
+            trim((string) ($input['business_address'] ?? '')) ?: null,
+            trim((string) ($input['notes'] ?? '')) ?: null,
             $authUserId > 0 ? $authUserId : null,
         ]);
         json_response(['id' => (int) db()->lastInsertId()]);
@@ -1954,6 +1957,18 @@ try {
         if (array_key_exists('source', $input)) {
             $fields[] = 'source = ?';
             $params[] = trim((string) ($input['source'] ?? 'manual')) ?: 'manual';
+        }
+        if (array_key_exists('company_name', $input)) {
+            $fields[] = 'company_name = ?';
+            $params[] = trim((string) ($input['company_name'] ?? '')) ?: null;
+        }
+        if (array_key_exists('business_address', $input)) {
+            $fields[] = 'business_address = ?';
+            $params[] = trim((string) ($input['business_address'] ?? '')) ?: null;
+        }
+        if (array_key_exists('notes', $input)) {
+            $fields[] = 'notes = ?';
+            $params[] = trim((string) ($input['notes'] ?? '')) ?: null;
         }
         if (array_key_exists('created_by_user_id', $input)) {
             $fields[] = 'created_by_user_id = ?';

@@ -9,6 +9,9 @@ interface Lead {
   email: string;
   phone: string;
   source: string;
+  company_name: string;
+  business_address: string;
+  notes: string;
   timestamp: string;
 }
 
@@ -29,7 +32,10 @@ export function Leads() {
     name: '',
     email: '',
     phone: '',
-    source: 'manual'
+    source: 'manual',
+    company_name: '',
+    business_address: '',
+    notes: '',
   });
 
   useEffect(() => {
@@ -42,6 +48,9 @@ export function Leads() {
     email: String(row.email || ''),
     phone: String(row.phone || ''),
     source: String(row.source || 'manual'),
+    company_name: String(row.company_name || ''),
+    business_address: String(row.business_address || ''),
+    notes: String(row.notes || ''),
     timestamp: String(row.timestamp || row.date || row.created_at || new Date().toISOString()),
   });
 
@@ -99,9 +108,12 @@ export function Leads() {
         email: newLead.email,
         phone: newLead.phone,
         source: newLead.source,
+        company_name: newLead.company_name,
+        business_address: newLead.business_address,
+        notes: newLead.notes,
       });
 
-      setNewLead({ name: '', email: '', phone: '', source: 'manual' });
+      setNewLead({ name: '', email: '', phone: '', source: 'manual', company_name: '', business_address: '', notes: '' });
       setShowAddModal(false);
       await loadLeads();
     } catch (error) {
@@ -125,6 +137,9 @@ export function Leads() {
         email: editingLead.email,
         phone: editingLead.phone,
         source: editingLead.source,
+        company_name: editingLead.company_name,
+        business_address: editingLead.business_address,
+        notes: editingLead.notes,
       });
 
       setShowEditModal(false);
@@ -221,7 +236,12 @@ export function Leads() {
         last_name: lastName,
         email: lead.email,
         phone: lead.phone,
-        notes: `Converted from lead. Original source: ${lead.source}`,
+        company: lead.company_name || null,
+        notes: [
+          `Converted from lead. Original source: ${lead.source}`,
+          lead.business_address ? `Business address: ${lead.business_address}` : '',
+          lead.notes ? `Lead notes: ${lead.notes}` : '',
+        ].filter(Boolean).join('\n'),
       });
 
       await apiDelete(`/leads/${lead.id}`);
@@ -308,7 +328,7 @@ export function Leads() {
 
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between p-6 border-b border-gray-200">
               <h2 className="text-xl font-bold text-gray-900">Add New Lead</h2>
               <button
@@ -374,6 +394,42 @@ export function Leads() {
                   <option value="event">Event</option>
                 </select>
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Company Name
+                </label>
+                <input
+                  type="text"
+                  value={newLead.company_name}
+                  onChange={(e) => setNewLead({ ...newLead, company_name: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Acme Inc."
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Business Address
+                </label>
+                <textarea
+                  value={newLead.business_address}
+                  onChange={(e) => setNewLead({ ...newLead, business_address: e.target.value })}
+                  rows={3}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                  placeholder="123 Main St, City, State ZIP"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Notes
+                </label>
+                <textarea
+                  value={newLead.notes}
+                  onChange={(e) => setNewLead({ ...newLead, notes: e.target.value })}
+                  rows={3}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                  placeholder="Add any extra context about this lead..."
+                />
+              </div>
               <div className="flex gap-3 pt-4">
                 <button
                   type="button"
@@ -396,7 +452,7 @@ export function Leads() {
 
       {showEditModal && editingLead && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between p-6 border-b border-gray-200">
               <h2 className="text-xl font-bold text-gray-900">Edit Lead</h2>
               <button
@@ -464,6 +520,42 @@ export function Leads() {
                   <option value="cold_call">Cold Call</option>
                   <option value="event">Event</option>
                 </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Company Name
+                </label>
+                <input
+                  type="text"
+                  value={editingLead.company_name}
+                  onChange={(e) => setEditingLead({ ...editingLead, company_name: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Acme Inc."
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Business Address
+                </label>
+                <textarea
+                  value={editingLead.business_address}
+                  onChange={(e) => setEditingLead({ ...editingLead, business_address: e.target.value })}
+                  rows={3}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                  placeholder="123 Main St, City, State ZIP"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Notes
+                </label>
+                <textarea
+                  value={editingLead.notes}
+                  onChange={(e) => setEditingLead({ ...editingLead, notes: e.target.value })}
+                  rows={3}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                  placeholder="Add any extra context about this lead..."
+                />
               </div>
               <div className="flex gap-3 pt-4">
                 <button

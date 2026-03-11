@@ -590,6 +590,26 @@ function ensure_runtime_schema(): void {
     );
 
     $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS leads (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(191) NOT NULL,
+            email VARCHAR(191) NOT NULL DEFAULT "",
+            phone VARCHAR(64) NOT NULL DEFAULT "",
+            source VARCHAR(64) NOT NULL DEFAULT "manual",
+            company_name VARCHAR(191) NULL,
+            business_address TEXT NULL,
+            notes TEXT NULL,
+            created_by_user_id INT NULL,
+            timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX leads_timestamp_idx (timestamp),
+            INDEX leads_created_by_idx (created_by_user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+    );
+    ensure_table_column_exists($pdo, 'leads', 'company_name', 'VARCHAR(191) NULL AFTER source');
+    ensure_table_column_exists($pdo, 'leads', 'business_address', 'TEXT NULL AFTER company_name');
+    ensure_table_column_exists($pdo, 'leads', 'notes', 'TEXT NULL AFTER business_address');
+
+    $pdo->exec(
         'CREATE TABLE IF NOT EXISTS conversations (
             id INT AUTO_INCREMENT PRIMARY KEY,
             name VARCHAR(191) NOT NULL,
