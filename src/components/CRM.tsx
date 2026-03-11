@@ -275,7 +275,7 @@ export function CRM() {
       case 'messages':
         return <Messages />;
       case 'meetings':
-        return <Meetings />;
+        return null;
       case 'callReports':
         return <CallReports />;
       case 'employees':
@@ -381,6 +381,13 @@ export function CRM() {
           </button>
         </div>
         {renderView()}
+        <Meetings
+          isActive={currentView === 'meetings'}
+          onRequestOpen={() => {
+            setCurrentView('meetings');
+            setSidebarOpen(false);
+          }}
+        />
         <HelpNotification />
         <MeetingInviteNotification
           onJoinMeeting={() => {

@@ -33,6 +33,11 @@ interface EmployeeOption {
   status?: string;
 }
 
+interface MeetingsProps {
+  isActive?: boolean;
+  onRequestOpen?: () => void;
+}
+
 const PRIMARY_JITSI_DOMAIN = 'meet.sthillstudios.com';
 const FALLBACK_JITSI_DOMAIN = 'meet.jit.si';
 const JITSI_SCRIPT_TIMEOUT_MS = 10000;
@@ -131,7 +136,7 @@ function getMeetingTypeLabel(meetingType: string): string {
   return 'Video';
 }
 
-export function Meetings() {
+export function Meetings({ isActive = true, onRequestOpen }: MeetingsProps = {}) {
   const [activeTab, setActiveTab] = useState<'schedule' | 'join'>('join');
   const [showQuickCall, setShowQuickCall] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
@@ -765,10 +770,16 @@ export function Meetings() {
     };
   }, [activeMeetingType, inMeeting, selectedRoomName]);
 
+  const shouldRenderMainUi = isActive || inMeeting || showQuickCall;
+
   return (
     <>
-      <div className="bg-[#FDF8F3] min-h-screen p-8">
-        <div className="max-w-5xl mx-auto">
+      {shouldRenderMainUi && (
+        <div
+          className={isActive ? 'bg-[#FDF8F3] min-h-screen p-8' : 'pointer-events-none fixed inset-0 -z-10 overflow-hidden opacity-0'}
+          aria-hidden={!isActive}
+        >
+          <div className="max-w-5xl mx-auto">
           <div className="mb-8">
             <h1 className="text-3xl font-bold text-slate-900 mb-6">Meetings & Training</h1>
 
@@ -1327,7 +1338,40 @@ export function Meetings() {
             </div>
           )}
         </div>
-      </div>
+        </div>
+      )}
+
+      {!isActive && inMeeting && !showQuickCall && (
+        <div className="fixed bottom-24 right-4 z-40 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-blue-200 bg-white/95 p-4 shadow-2xl backdrop-blur sm:bottom-6 sm:right-24">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wide text-blue-600">Meeting minimized</p>
+              <p className="mt-1 truncate text-sm font-semibold text-slate-900">{selectedRoomName}</p>
+              <p className="mt-1 text-xs text-gray-600">
+                Your {activeMeetingType === 'phone' ? 'voice' : 'video'} meeting is still active. Return to the Meetings tab to continue.
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  onRequestOpen?.();
+                }}
+                className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+              >
+                Return
+              </button>
+              <button
+                type="button"
+                onClick={leaveMeeting}
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+              >
+                Leave
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showScheduleModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
