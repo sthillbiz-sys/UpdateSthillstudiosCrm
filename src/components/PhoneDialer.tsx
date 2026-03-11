@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent } from 'react';
-import { Phone, Settings, Trash2, HelpCircle, X, Video, Mic, Users, History, User, Delete } from 'lucide-react';
+import { Phone, Settings, Trash2, HelpCircle, X, Video, Mic, Users, History, User, Delete, Minus, Maximize2 } from 'lucide-react';
 import { SwEvent, TelnyxRTC, type Call as TelnyxCall, type INotification } from '@telnyx/webrtc';
 import { usePresence } from '../lib/presence';
 import { useAuth } from '../lib/auth';
@@ -151,6 +151,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [callerNumbers, setCallerNumbers] = useState<string[]>([]);
   const [selectedCallerNumber, setSelectedCallerNumber] = useState('');
+  const [isMinimized, setIsMinimized] = useState(false);
 
   const dialerRef = useRef<HTMLDivElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -829,6 +830,67 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
   const callButtonDisabled = !isInCall && (!isCallableNumber || connectionState !== 'ready' || selectedCallerNumberUnavailable || availableCallerNumbers.length === 0);
 
   if (onClose) {
+    if (isMinimized) {
+      return (
+        <div
+          ref={dialerRef}
+          className="fixed z-50 w-72 rounded-2xl border border-slate-700 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 shadow-2xl"
+          style={{ right: '20px', bottom: '20px' }}
+        >
+          <audio ref={remoteAudioRef} id="telnyx-remote-audio" autoPlay playsInline className="hidden" />
+          <div className="flex items-center justify-between gap-3 px-4 py-3">
+            <button
+              type="button"
+              onClick={() => setIsMinimized(false)}
+              className="flex min-w-0 flex-1 items-center gap-3 text-left"
+            >
+              <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
+                isInCall ? 'bg-red-500/20 text-red-300' : 'bg-blue-500/20 text-cyan-300'
+              }`}>
+                <Phone className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-white">Phone Dialer</p>
+                <p className="truncate text-xs text-slate-300">
+                  {getConnectionStateLabel(connectionState)} • {getCallStateLabel(callState)}
+                  {dialerMessage !== '' ? ` • ${dialerMessage}` : ''}
+                </p>
+              </div>
+            </button>
+
+            <div className="flex shrink-0 items-center gap-2">
+              {isInCall && (
+                <button
+                  type="button"
+                  onClick={handlePrimaryCallAction}
+                  className="rounded-full bg-red-500 p-2 text-white transition-colors hover:bg-red-400"
+                  title="End call"
+                >
+                  <Phone className="h-4 w-4" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setIsMinimized(false)}
+                className="rounded-full p-2 text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+                title="Open dialer"
+              >
+                <Maximize2 className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-full p-2 text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+                title="Close dialer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div
         ref={dialerRef}
@@ -851,12 +913,23 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
                   <p className="text-xs text-blue-100">{formattedName}</p>
                 </div>
               </div>
-              <button
-                onClick={onClose}
-                className="p-1 hover:bg-white/20 rounded-full transition-colors backdrop-blur-sm"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setIsMinimized(true)}
+                  className="p-1 hover:bg-white/20 rounded-full transition-colors backdrop-blur-sm"
+                  title="Minimize dialer"
+                >
+                  <Minus className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={onClose}
+                  className="p-1 hover:bg-white/20 rounded-full transition-colors backdrop-blur-sm"
+                  title="Close dialer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             <div className="flex gap-1">
