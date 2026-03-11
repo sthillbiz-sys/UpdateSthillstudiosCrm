@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { Phone, Settings, Trash2, HelpCircle, X, Video, Mic, Users, History, User, Delete, Minus, Maximize2 } from 'lucide-react';
 import { SwEvent, TelnyxRTC, type Call as TelnyxCall, type INotification } from '@telnyx/webrtc';
 import { usePresence } from '../lib/presence';
@@ -12,6 +12,10 @@ interface PhoneDialerProps {
 
 type DialerConnectionState = 'initializing' | 'ready' | 'error' | 'offline';
 type DialerCallState = 'idle' | 'dialing' | 'ringing' | 'active';
+type DialerPosition = {
+  x: number;
+  y: number;
+};
 
 type TelnyxAccessTokenResponse = {
   token: string;
@@ -33,6 +37,21 @@ type CallHistoryItem = {
 
 const PRE_CALL_STATES = new Set(['new', 'requesting', 'trying', 'recovering', 'answering', 'early']);
 const TERMINAL_STATES = new Set(['hangup', 'destroy', 'purge']);
+const DIALER_VIEWPORT_MARGIN = 20;
+
+function clampDialerPosition(position: DialerPosition, width: number, height: number): DialerPosition {
+  if (typeof window === 'undefined') {
+    return position;
+  }
+
+  const maxX = Math.max(DIALER_VIEWPORT_MARGIN, window.innerWidth - width - DIALER_VIEWPORT_MARGIN);
+  const maxY = Math.max(DIALER_VIEWPORT_MARGIN, window.innerHeight - height - DIALER_VIEWPORT_MARGIN);
+
+  return {
+    x: Math.min(Math.max(DIALER_VIEWPORT_MARGIN, position.x), maxX),
+    y: Math.min(Math.max(DIALER_VIEWPORT_MARGIN, position.y), maxY),
+  };
+}
 
 function normalizeDestinationNumber(raw: string): string | null {
   const trimmed = String(raw || '').trim();
@@ -152,6 +171,8 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
   const [callerNumbers, setCallerNumbers] = useState<string[]>([]);
   const [selectedCallerNumber, setSelectedCallerNumber] = useState('');
   const [isMinimized, setIsMinimized] = useState(false);
+  const [dialerPosition, setDialerPosition] = useState<DialerPosition | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const dialerRef = useRef<HTMLDivElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -168,6 +189,8 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
   const ringbackStopTimeoutRef = useRef<number | null>(null);
   const ringbackOscillatorsRef = useRef<OscillatorNode[]>([]);
   const ringbackGainRef = useRef<GainNode | null>(null);
+  const dragPointerIdRef = useRef<number | null>(null);
+  const dragOffsetRef = useRef({ x: 0, y: 0 });
 
   const userName = user?.email?.split('@')[0] || 'Agent';
   const formattedName = userName
@@ -828,17 +851,154 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
   };
 
   const callButtonDisabled = !isInCall && (!isCallableNumber || connectionState !== 'ready' || selectedCallerNumberUnavailable || availableCallerNumbers.length === 0);
+  const dialerFloatingStyle = dialerPosition
+    ? { left: `${dialerPosition.x}px`, top: `${dialerPosition.y}px` }
+    : { right: `${DIALER_VIEWPORT_MARGIN}px`, bottom: `${DIALER_VIEWPORT_MARGIN}px` };
+
+  const syncDialerPositionToViewport = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const dialer = dialerRef.current;
+    if (!dialer) {
+      return;
+    }
+
+    const rect = dialer.getBoundingClientRect();
+    setDialerPosition((current) => {
+      if (current === null) {
+        return clampDialerPosition(
+          {
+            x: window.innerWidth - rect.width - DIALER_VIEWPORT_MARGIN,
+            y: window.innerHeight - rect.height - DIALER_VIEWPORT_MARGIN,
+          },
+          rect.width,
+          rect.height,
+        );
+      }
+
+      return clampDialerPosition(current, rect.width, rect.height);
+    });
+  }, []);
+
+  const handleDialerDragStart = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('button, input, select, textarea, a')) {
+      return;
+    }
+
+    const dialer = dialerRef.current;
+    if (!dialer) {
+      return;
+    }
+
+    const rect = dialer.getBoundingClientRect();
+    dragPointerIdRef.current = event.pointerId;
+    dragOffsetRef.current = {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    };
+    setIsDragging(true);
+    setDialerPosition((current) => current ?? clampDialerPosition({
+      x: rect.left,
+      y: rect.top,
+    }, rect.width, rect.height));
+    event.preventDefault();
+  }, []);
+
+  useEffect(() => {
+    syncDialerPositionToViewport();
+  }, [syncDialerPositionToViewport]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      syncDialerPositionToViewport();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [isMinimized, activeTab, syncDialerPositionToViewport]);
+
+  useEffect(() => {
+    if (!isDragging) {
+      return undefined;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (dragPointerIdRef.current !== null && event.pointerId !== dragPointerIdRef.current) {
+        return;
+      }
+
+      const dialer = dialerRef.current;
+      if (!dialer) {
+        return;
+      }
+
+      const rect = dialer.getBoundingClientRect();
+      setDialerPosition(clampDialerPosition(
+        {
+          x: event.clientX - dragOffsetRef.current.x,
+          y: event.clientY - dragOffsetRef.current.y,
+        },
+        rect.width,
+        rect.height,
+      ));
+    };
+
+    const stopDragging = (event?: PointerEvent) => {
+      if (event && dragPointerIdRef.current !== null && event.pointerId !== dragPointerIdRef.current) {
+        return;
+      }
+
+      dragPointerIdRef.current = null;
+      setIsDragging(false);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', stopDragging);
+    window.addEventListener('pointercancel', stopDragging);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopDragging);
+      window.removeEventListener('pointercancel', stopDragging);
+    };
+  }, [isDragging]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const handleResize = () => {
+      syncDialerPositionToViewport();
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [syncDialerPositionToViewport]);
 
   if (onClose) {
     if (isMinimized) {
       return (
         <div
           ref={dialerRef}
-          className="fixed z-50 w-72 rounded-2xl border border-slate-700 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 shadow-2xl"
-          style={{ right: '20px', bottom: '20px' }}
+          className={`fixed z-50 w-72 rounded-2xl border border-slate-700 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 shadow-2xl ${isDragging ? 'select-none' : ''}`}
+          style={dialerFloatingStyle}
         >
           <audio ref={remoteAudioRef} id="telnyx-remote-audio" autoPlay playsInline className="hidden" />
-          <div className="flex items-center justify-between gap-3 px-4 py-3">
+          <div
+            className={`flex cursor-move items-center justify-between gap-3 px-4 py-3 ${isDragging ? 'select-none' : ''}`}
+            onPointerDown={handleDialerDragStart}
+          >
             <button
               type="button"
               onClick={() => setIsMinimized(false)}
@@ -894,11 +1054,14 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
     return (
       <div
         ref={dialerRef}
-        className="fixed z-50 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-2xl shadow-2xl w-80 border border-slate-700"
-        style={{ right: '20px', bottom: '20px' }}
+        className={`fixed z-50 w-80 rounded-2xl border border-slate-700 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 shadow-2xl ${isDragging ? 'select-none' : ''}`}
+        style={dialerFloatingStyle}
       >
         <audio ref={remoteAudioRef} id="telnyx-remote-audio" autoPlay playsInline className="hidden" />
-        <div className="relative bg-gradient-to-br from-blue-600 via-blue-700 to-blue-900 text-white px-4 py-3 overflow-hidden">
+        <div
+          className={`relative overflow-hidden bg-gradient-to-br from-blue-600 via-blue-700 to-blue-900 px-4 py-3 text-white ${isDragging ? 'select-none' : ''}`}
+          onPointerDown={handleDialerDragStart}
+        >
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-blue-400/20 via-transparent to-transparent"></div>
           <div className="relative z-10">
             <div className="flex items-center justify-between mb-2">
