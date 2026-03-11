@@ -160,6 +160,8 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
   const dialedNumberRef = useRef('');
   const callLoggedRef = useRef(false);
   const lastTelnyxStateRef = useRef('');
+  const outboundSetupInFlightRef = useRef(false);
+  const cancelOutboundSetupRef = useRef(false);
   const ringbackAudioContextRef = useRef<AudioContext | null>(null);
   const ringbackLoopTimeoutRef = useRef<number | null>(null);
   const ringbackStopTimeoutRef = useRef<number | null>(null);
@@ -348,6 +350,8 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
     callStartedAtRef.current = null;
     lastTelnyxStateRef.current = '';
     dialedNumberRef.current = '';
+    outboundSetupInFlightRef.current = false;
+    cancelOutboundSetupRef.current = false;
     stopRingbackTone();
     setCallState('idle');
     setIsMuted(false);
@@ -443,6 +447,40 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
     },
     [loadCallHistory, resetCallUiState, setOnCall],
   );
+
+  const cancelPendingOutboundSetup = useCallback(async () => {
+    cancelOutboundSetupRef.current = true;
+    outboundSetupInFlightRef.current = false;
+    stopRingbackTone();
+    activeCallRef.current = null;
+    callStartedAtRef.current = null;
+    lastTelnyxStateRef.current = 'hangup';
+    setCallState('idle');
+    setIsMuted(false);
+    setDialerMessage('Call canceled');
+
+    try {
+      await setOnCall(false, null);
+    } catch (error) {
+      console.error('Error clearing caller number reservation after cancel:', error);
+    }
+
+    try {
+      await updatePresence('available');
+    } catch (error) {
+      console.error('Error resetting presence after cancel:', error);
+    }
+  }, [setOnCall, stopRingbackTone, updatePresence]);
+
+  const reserveCallerNumberForCall = useCallback((callerNumber: string) => {
+    void setOnCall(true, callerNumber).catch((error) => {
+      console.error('Error reserving caller number for outbound call:', error);
+    });
+
+    void updatePresence('busy').catch((error) => {
+      console.error('Error updating presence for outbound call:', error);
+    });
+  }, [setOnCall, updatePresence]);
 
   const handleTelnyxNotification = useCallback(
     (notification: INotification) => {
@@ -638,6 +676,8 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
     }
 
     try {
+      outboundSetupInFlightRef.current = true;
+      cancelOutboundSetupRef.current = false;
       dialedNumberRef.current = destination;
       callStartedAtRef.current = null;
       callLoggedRef.current = false;
@@ -645,10 +685,16 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       setCallState('dialing');
       setDialerMessage('Placing call...');
       await ensureRemoteAudioPlayback();
-      void playRingbackTone();
+      if (cancelOutboundSetupRef.current) {
+        await cancelPendingOutboundSetup();
+        return;
+      }
 
-      await setOnCall(true, selectedCallerNumber);
-      await updatePresence('busy');
+      await playRingbackTone();
+      if (cancelOutboundSetupRef.current) {
+        await cancelPendingOutboundSetup();
+        return;
+      }
 
       const call = client.newCall({
         destinationNumber: destination,
@@ -658,19 +704,34 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       });
 
       activeCallRef.current = call;
+      outboundSetupInFlightRef.current = false;
+      reserveCallerNumberForCall(selectedCallerNumber);
+
+      if (cancelOutboundSetupRef.current) {
+        try {
+          call.hangup();
+        } catch (hangupError) {
+          console.error('Error canceling outbound Telnyx call during setup:', hangupError);
+        }
+        await cancelPendingOutboundSetup();
+      }
     } catch (error) {
       console.error('Error starting Telnyx call:', error);
+      outboundSetupInFlightRef.current = false;
       stopRingbackTone();
       setCallState('idle');
       setDialerMessage(error instanceof Error ? error.message : 'Failed to start call.');
       void setOnCall(false, null);
       void updatePresence('available');
     }
-  }, [connectionState, ensureRemoteAudioPlayback, phoneNumber, playRingbackTone, selectedCallerNumber, selectedCallerNumberUnavailable, setOnCall, stopRingbackTone, updatePresence]);
+  }, [cancelPendingOutboundSetup, connectionState, ensureRemoteAudioPlayback, phoneNumber, playRingbackTone, reserveCallerNumberForCall, selectedCallerNumber, selectedCallerNumberUnavailable, setOnCall, stopRingbackTone, updatePresence]);
 
   const hangupCall = useCallback(() => {
     const call = activeCallRef.current;
     if (!call) {
+      if (callState === 'dialing' || outboundSetupInFlightRef.current) {
+        void cancelPendingOutboundSetup();
+      }
       return;
     }
 
@@ -685,7 +746,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
         void finalizeAndLogCall(lastTelnyxStateRef.current || 'hangup');
       }
     }, 1500);
-  }, [finalizeAndLogCall]);
+  }, [callState, cancelPendingOutboundSetup, finalizeAndLogCall]);
 
   const handlePrimaryCallAction = useCallback(() => {
     if (isInCall) {

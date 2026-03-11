@@ -43,11 +43,34 @@ export function TimeTracking() {
   const [elapsedTime, setElapsedTime] = useState(0);
   const [view, setView] = useState<'today' | 'week' | 'month' | 'year'>('today');
 
+  const formatLocalDateKey = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const parseAppDate = (value?: string) => {
     if (!value) {
       return null;
     }
-    const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+
+    const trimmed = value.trim();
+    if (trimmed === '') {
+      return null;
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      const [year, month, day] = trimmed.split('-').map(Number);
+      const localDate = new Date(year, month - 1, day);
+      return Number.isNaN(localDate.getTime()) ? null : localDate;
+    }
+
+    let normalized = trimmed.includes('T') ? trimmed : trimmed.replace(' ', 'T');
+    if (!/(Z|[+-]\d{2}:\d{2})$/i.test(normalized)) {
+      normalized = `${normalized}Z`;
+    }
+
     const date = new Date(normalized);
     return Number.isNaN(date.getTime()) ? null : date;
   };
@@ -233,7 +256,7 @@ export function TimeTracking() {
         .insert([
           {
             user_id: user.id,
-            shift_date: new Date().toISOString().split('T')[0],
+            shift_date: formatLocalDateKey(new Date()),
             clock_in: new Date().toISOString(),
             status: 'clocked_in',
           },
@@ -402,7 +425,7 @@ export function TimeTracking() {
 
   const getFilteredShifts = () => {
     const now = new Date();
-    const today = now.toISOString().split('T')[0];
+    const today = formatLocalDateKey(now);
 
     return shifts.filter((shift) => {
       const shiftDate = parseAppDate(shift.shift_date);
