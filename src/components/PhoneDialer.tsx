@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent } from 'react';
 import { Phone, Settings, Trash2, HelpCircle, X, Video, Mic, Users, History, User, Delete } from 'lucide-react';
 import { SwEvent, TelnyxRTC, type Call as TelnyxCall, type INotification } from '@telnyx/webrtc';
 import { usePresence } from '../lib/presence';
@@ -71,6 +71,21 @@ function formatPhoneNumber(num: string): string {
   return `+${digits}`;
 }
 
+function sanitizeDialerInput(raw: string): string {
+  const value = String(raw || '').trim();
+  if (value === '') {
+    return '';
+  }
+
+  const hasLeadingPlus = value.startsWith('+');
+  const digits = value.replace(/\D+/g, '').slice(0, 15);
+  if (digits === '') {
+    return hasLeadingPlus ? '+' : '';
+  }
+
+  return hasLeadingPlus ? `+${digits}` : digits;
+}
+
 function formatDurationSeconds(seconds: number): string {
   const safe = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
   const mins = Math.floor(safe / 60);
@@ -138,12 +153,18 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
   const [selectedCallerNumber, setSelectedCallerNumber] = useState('');
 
   const dialerRef = useRef<HTMLDivElement>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const telnyxClientRef = useRef<TelnyxRTC | null>(null);
   const activeCallRef = useRef<TelnyxCall | null>(null);
   const callStartedAtRef = useRef<number | null>(null);
   const dialedNumberRef = useRef('');
   const callLoggedRef = useRef(false);
   const lastTelnyxStateRef = useRef('');
+  const ringbackAudioContextRef = useRef<AudioContext | null>(null);
+  const ringbackLoopTimeoutRef = useRef<number | null>(null);
+  const ringbackStopTimeoutRef = useRef<number | null>(null);
+  const ringbackOscillatorsRef = useRef<OscillatorNode[]>([]);
+  const ringbackGainRef = useRef<GainNode | null>(null);
 
   const userName = user?.email?.split('@')[0] || 'Agent';
   const formattedName = userName
@@ -162,6 +183,28 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
 
   const handleClear = () => {
     setPhoneNumber('');
+  };
+
+  const handlePhoneNumberInput = (value: string) => {
+    setPhoneNumber(sanitizeDialerInput(value));
+  };
+
+  const handlePhoneNumberChange = (event: ChangeEvent<HTMLInputElement>) => {
+    if (isInCall) {
+      return;
+    }
+
+    handlePhoneNumberInput(event.target.value);
+  };
+
+  const handlePhoneNumberPaste = (event: ClipboardEvent<HTMLInputElement>) => {
+    if (isInCall) {
+      event.preventDefault();
+      return;
+    }
+
+    event.preventDefault();
+    handlePhoneNumberInput(event.clipboardData.getData('text'));
   };
 
   const loadCallHistory = useCallback(async () => {
@@ -183,14 +226,132 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
     }
   }, [user]);
 
+  const ensureRemoteAudioPlayback = useCallback(async () => {
+    const element = remoteAudioRef.current;
+    if (!element) {
+      return;
+    }
+
+    element.autoplay = true;
+    element.playsInline = true;
+    element.muted = false;
+    element.volume = 1;
+
+    try {
+      await element.play();
+    } catch (error) {
+      const domError = error as DOMException | undefined;
+      if (domError?.name !== 'NotSupportedError' && domError?.name !== 'AbortError') {
+        console.debug('Remote audio playback is not ready yet:', error);
+      }
+    }
+  }, []);
+
+  const clearRingbackBurst = useCallback(() => {
+    for (const oscillator of ringbackOscillatorsRef.current) {
+      try {
+        oscillator.stop();
+      } catch {
+        // Oscillator may already be stopped.
+      }
+      try {
+        oscillator.disconnect();
+      } catch {
+        // Ignore disconnect errors during cleanup.
+      }
+    }
+
+    ringbackOscillatorsRef.current = [];
+
+    if (ringbackGainRef.current) {
+      try {
+        ringbackGainRef.current.disconnect();
+      } catch {
+        // Ignore disconnect errors during cleanup.
+      }
+      ringbackGainRef.current = null;
+    }
+  }, []);
+
+  const stopRingbackTone = useCallback(() => {
+    if (ringbackLoopTimeoutRef.current !== null) {
+      window.clearTimeout(ringbackLoopTimeoutRef.current);
+      ringbackLoopTimeoutRef.current = null;
+    }
+    if (ringbackStopTimeoutRef.current !== null) {
+      window.clearTimeout(ringbackStopTimeoutRef.current);
+      ringbackStopTimeoutRef.current = null;
+    }
+    clearRingbackBurst();
+  }, [clearRingbackBurst]);
+
+  const playRingbackTone = useCallback(async () => {
+    if (typeof window === 'undefined' || ringbackLoopTimeoutRef.current !== null) {
+      return;
+    }
+
+    const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) {
+      return;
+    }
+
+    let context = ringbackAudioContextRef.current;
+    if (!context || context.state === 'closed') {
+      context = new AudioContextCtor();
+      ringbackAudioContextRef.current = context;
+    }
+
+    try {
+      if (context.state === 'suspended') {
+        await context.resume();
+      }
+    } catch (error) {
+      console.debug('Unable to resume ringback audio context:', error);
+      return;
+    }
+
+    clearRingbackBurst();
+
+    const gain = context.createGain();
+    const oscillators = [440, 480].map((frequency) => {
+      const oscillator = context.createOscillator();
+      oscillator.type = 'sine';
+      oscillator.frequency.value = frequency;
+      oscillator.connect(gain);
+      return oscillator;
+    });
+
+    const now = context.currentTime;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(0.045, now + 0.02);
+    gain.gain.setValueAtTime(0.045, now + 1.95);
+    gain.gain.linearRampToValueAtTime(0.0001, now + 2);
+    gain.connect(context.destination);
+
+    oscillators.forEach((oscillator) => oscillator.start(now));
+    oscillators.forEach((oscillator) => oscillator.stop(now + 2.05));
+
+    ringbackGainRef.current = gain;
+    ringbackOscillatorsRef.current = oscillators;
+    ringbackStopTimeoutRef.current = window.setTimeout(() => {
+      ringbackStopTimeoutRef.current = null;
+      clearRingbackBurst();
+    }, 2200);
+    ringbackLoopTimeoutRef.current = window.setTimeout(() => {
+      ringbackLoopTimeoutRef.current = null;
+      void playRingbackTone();
+    }, 6000);
+  }, [clearRingbackBurst]);
+
   const resetCallUiState = useCallback(() => {
     activeCallRef.current = null;
     callStartedAtRef.current = null;
     lastTelnyxStateRef.current = '';
     dialedNumberRef.current = '';
+    stopRingbackTone();
     setCallState('idle');
     setIsMuted(false);
-  }, []);
+  }, [stopRingbackTone]);
 
   const hasMultipleCallerNumbers = callerNumbers.length > 1;
   const currentUserEmail = String(user?.email || '').trim().toLowerCase();
@@ -294,13 +455,24 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       lastTelnyxStateRef.current = state;
       activeCallRef.current = call;
 
+      const remoteStream = (call as TelnyxCall & { remoteStream?: MediaStream | null }).remoteStream;
+      if (remoteAudioRef.current && remoteStream && remoteAudioRef.current.srcObject !== remoteStream) {
+        remoteAudioRef.current.srcObject = remoteStream;
+      }
+
       if (PRE_CALL_STATES.has(state)) {
         setCallState('dialing');
+        setDialerMessage('Connecting call...');
+        void ensureRemoteAudioPlayback();
+        void playRingbackTone();
         return;
       }
 
       if (state === 'ringing') {
         setCallState('ringing');
+        setDialerMessage('Ringing...');
+        void ensureRemoteAudioPlayback();
+        void playRingbackTone();
         return;
       }
 
@@ -308,17 +480,20 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
         if (callStartedAtRef.current === null) {
           callStartedAtRef.current = Date.now();
         }
+        stopRingbackTone();
         setCallState('active');
         setDialerMessage('Call in progress');
+        void ensureRemoteAudioPlayback();
         void setOnCall(true, selectedCallerNumber);
         return;
       }
 
       if (TERMINAL_STATES.has(state)) {
+        stopRingbackTone();
         void finalizeAndLogCall(state);
       }
     },
-    [finalizeAndLogCall, selectedCallerNumber, setOnCall],
+    [ensureRemoteAudioPlayback, finalizeAndLogCall, playRingbackTone, selectedCallerNumber, setOnCall, stopRingbackTone],
   );
 
   const initializeDialer = useCallback(async () => {
@@ -360,7 +535,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       login_token: token,
       debug: false,
     });
-    client.remoteElement = 'telnyx-remote-audio';
+    client.remoteElement = remoteAudioRef.current || 'telnyx-remote-audio';
 
     client
       .on(SwEvent.Ready, () => {
@@ -422,6 +597,16 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       }
 
       resetCallUiState();
+      const remoteAudio = remoteAudioRef.current;
+      if (remoteAudio) {
+        remoteAudio.pause();
+        remoteAudio.srcObject = null;
+      }
+      const ringbackContext = ringbackAudioContextRef.current;
+      ringbackAudioContextRef.current = null;
+      if (ringbackContext && ringbackContext.state !== 'closed') {
+        void ringbackContext.close().catch(() => undefined);
+      }
       void setOnCall(false, null);
     };
   }, [initializeDialer, loadCallHistory, resetCallUiState, setOnCall]);
@@ -459,6 +644,8 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       lastTelnyxStateRef.current = 'requesting';
       setCallState('dialing');
       setDialerMessage('Placing call...');
+      await ensureRemoteAudioPlayback();
+      void playRingbackTone();
 
       await setOnCall(true, selectedCallerNumber);
       await updatePresence('busy');
@@ -466,19 +653,20 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       const call = client.newCall({
         destinationNumber: destination,
         callerNumber: selectedCallerNumber,
-        remoteElement: 'telnyx-remote-audio',
+        remoteElement: remoteAudioRef.current || 'telnyx-remote-audio',
         audio: true,
       });
 
       activeCallRef.current = call;
     } catch (error) {
       console.error('Error starting Telnyx call:', error);
+      stopRingbackTone();
       setCallState('idle');
       setDialerMessage(error instanceof Error ? error.message : 'Failed to start call.');
       void setOnCall(false, null);
       void updatePresence('available');
     }
-  }, [connectionState, phoneNumber, selectedCallerNumber, selectedCallerNumberUnavailable, setOnCall, updatePresence]);
+  }, [connectionState, ensureRemoteAudioPlayback, phoneNumber, playRingbackTone, selectedCallerNumber, selectedCallerNumberUnavailable, setOnCall, stopRingbackTone, updatePresence]);
 
   const hangupCall = useCallback(() => {
     const call = activeCallRef.current;
@@ -590,7 +778,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
         className="fixed z-50 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-2xl shadow-2xl w-80 border border-slate-700"
         style={{ right: '20px', bottom: '20px' }}
       >
-        <audio id="telnyx-remote-audio" autoPlay playsInline className="hidden" />
+        <audio ref={remoteAudioRef} id="telnyx-remote-audio" autoPlay playsInline className="hidden" />
         <div className="relative bg-gradient-to-br from-blue-600 via-blue-700 to-blue-900 text-white px-4 py-3 overflow-hidden">
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-blue-400/20 via-transparent to-transparent"></div>
           <div className="relative z-10">
@@ -653,8 +841,12 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
                 <input
                   type="text"
                   value={formatPhoneNumber(phoneNumber)}
-                  readOnly
+                  onChange={handlePhoneNumberChange}
+                  onPaste={handlePhoneNumberPaste}
                   placeholder="Enter phone number"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  disabled={isInCall}
                   className="w-full text-center text-xl font-mono font-bold py-2 bg-transparent text-cyan-300 outline-none tracking-wider"
                 />
               </div>
@@ -851,7 +1043,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
 
   return (
     <div className="min-h-screen bg-slate-900 p-8">
-      <audio id="telnyx-remote-audio" autoPlay playsInline className="hidden" />
+      <audio ref={remoteAudioRef} id="telnyx-remote-audio" autoPlay playsInline className="hidden" />
       <div className="max-w-4xl mx-auto">
         <div className="bg-slate-800 rounded-2xl p-6 mb-6">
           <div className="flex items-center justify-between mb-6">
