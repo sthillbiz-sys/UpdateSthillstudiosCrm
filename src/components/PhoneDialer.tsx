@@ -684,13 +684,8 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       lastTelnyxStateRef.current = 'requesting';
       setCallState('dialing');
       setDialerMessage('Placing call...');
-      await ensureRemoteAudioPlayback();
-      if (cancelOutboundSetupRef.current) {
-        await cancelPendingOutboundSetup();
-        return;
-      }
-
-      await playRingbackTone();
+      void ensureRemoteAudioPlayback();
+      void playRingbackTone();
       if (cancelOutboundSetupRef.current) {
         await cancelPendingOutboundSetup();
         return;
@@ -706,6 +701,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       activeCallRef.current = call;
       outboundSetupInFlightRef.current = false;
       reserveCallerNumberForCall(selectedCallerNumber);
+      void ensureRemoteAudioPlayback();
 
       if (cancelOutboundSetupRef.current) {
         try {
