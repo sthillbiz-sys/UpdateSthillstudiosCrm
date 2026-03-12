@@ -9,6 +9,7 @@ interface CallReport {
   agent_email: string;
   contact_name: string;
   contact_phone: string;
+  used_number: string;
   duration: number;
   outcome: string;
   notes: string;
@@ -41,6 +42,7 @@ export function CallReports() {
         agent_email: String(row.agent_email || ''),
         contact_name: String(row.contact_name || 'Outbound Call'),
         contact_phone: String(row.phone_number || row.contact_phone || ''),
+        used_number: String(row.from_number || ''),
         duration: Number(row.duration || 0),
         outcome: String(row.status || row.outcome || ''),
         notes: String(row.notes || ''),
@@ -109,11 +111,12 @@ export function CallReports() {
   const formatOutcomeLabel = (outcome: string) => String(outcome || '').replace(/_/g, '-');
 
   const handleExportReport = () => {
-    const headers = ['Agent', 'Contact', 'Phone', 'DurationMinutes', 'Outcome', 'CalledAt', 'Notes'];
+    const headers = ['Agent', 'Contact', 'Phone', 'UsedNumber', 'DurationMinutes', 'Outcome', 'CalledAt', 'Notes'];
     const rows = reports.map((report) => [
       report.agent_name || report.agent_email || '',
       report.contact_name || '',
       report.contact_phone || '',
+      report.used_number || '',
       String(report.duration || 0),
       report.outcome || '',
       report.called_at || '',
@@ -262,8 +265,12 @@ export function CallReports() {
                   Phone
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  Used Number
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                   Duration
                 </th>
+                
                 <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                   Outcome
                 </th>
@@ -278,7 +285,7 @@ export function CallReports() {
             <tbody className="divide-y divide-gray-200 bg-white">
               {reports.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-gray-500 text-sm">
+                  <td colSpan={8} className="px-6 py-12 text-center text-gray-500 text-sm">
                     No call reports available for the selected period.
                   </td>
                 </tr>
@@ -293,6 +300,9 @@ export function CallReports() {
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
                       {report.contact_phone}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-600">
+                      {report.used_number || '-'}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-900">
                       {formatDuration(report.duration)}

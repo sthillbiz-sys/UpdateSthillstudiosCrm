@@ -1526,11 +1526,12 @@ try {
         $input = read_json_body();
         $contactName = (string) ($input['contact_name'] ?? '');
         $phoneNumber = (string) ($input['phone_number'] ?? '');
+        $fromNumber = trim((string) ($input['from_number'] ?? ''));
         $duration = (int) ($input['duration'] ?? 0);
         $status = (string) ($input['status'] ?? 'completed');
 
-        $stmt = db()->prepare('INSERT INTO calls (contact_name, phone_number, duration, status, created_by_user_id) VALUES (?, ?, ?, ?, ?)');
-        $stmt->execute([$contactName, $phoneNumber, $duration, $status, $authUserId > 0 ? $authUserId : null]);
+        $stmt = db()->prepare('INSERT INTO calls (contact_name, phone_number, from_number, duration, status, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?)');
+        $stmt->execute([$contactName, $phoneNumber, $fromNumber !== '' ? $fromNumber : null, $duration, $status, $authUserId > 0 ? $authUserId : null]);
         json_response(['id' => (int) db()->lastInsertId()]);
     }
 

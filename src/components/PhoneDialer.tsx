@@ -29,6 +29,7 @@ type CallHistoryItem = {
   id: number;
   contact_name?: string;
   phone_number?: string;
+  from_number?: string;
   duration?: number;
   status?: string;
   timestamp?: string;
@@ -180,6 +181,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
   const activeCallRef = useRef<TelnyxCall | null>(null);
   const callStartedAtRef = useRef<number | null>(null);
   const dialedNumberRef = useRef('');
+  const usedCallerNumberRef = useRef('');
   const callLoggedRef = useRef(false);
   const lastTelnyxStateRef = useRef('');
   const outboundSetupInFlightRef = useRef(false);
@@ -374,6 +376,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
     callStartedAtRef.current = null;
     lastTelnyxStateRef.current = '';
     dialedNumberRef.current = '';
+    usedCallerNumberRef.current = '';
     outboundSetupInFlightRef.current = false;
     cancelOutboundSetupRef.current = false;
     stopRingbackTone();
@@ -439,12 +442,14 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       const duration = startedAt === null ? 0 : Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
       const status = resolveCallOutcome(finalTelnyxState, answered);
       const dialed = dialedNumberRef.current;
+      const usedCallerNumber = usedCallerNumberRef.current;
 
       try {
         if (dialed !== '') {
           await apiPost('/calls', {
             contact_name: 'Outbound Call',
             phone_number: dialed,
+            from_number: usedCallerNumber,
             duration,
             status,
           });
@@ -703,6 +708,7 @@ export function PhoneDialer({ onClose }: PhoneDialerProps = {}) {
       outboundSetupInFlightRef.current = true;
       cancelOutboundSetupRef.current = false;
       dialedNumberRef.current = destination;
+      usedCallerNumberRef.current = selectedCallerNumber;
       callStartedAtRef.current = null;
       callLoggedRef.current = false;
       lastTelnyxStateRef.current = 'requesting';
