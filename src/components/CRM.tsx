@@ -131,6 +131,7 @@ export function CRM() {
             scheduledDate?: string;
             scheduledTime?: string;
             senderName?: string;
+            senderEmail?: string;
             attendees?: string[];
           };
 
@@ -152,8 +153,9 @@ export function CRM() {
               ? payload.attendees.map((attendee) => String(attendee || '').trim().toLowerCase()).filter(Boolean)
               : [];
             const currentUserEmail = String(user.email || '').trim().toLowerCase();
+            const senderEmail = String(payload.senderEmail || '').trim().toLowerCase();
 
-            if (!currentUserEmail || attendees.length === 0 || !attendees.includes(currentUserEmail)) {
+            if (!currentUserEmail || attendees.length === 0 || !attendees.includes(currentUserEmail) || currentUserEmail === senderEmail) {
               return;
             }
 
@@ -168,6 +170,7 @@ export function CRM() {
                 scheduledDate: payload.scheduledDate || '',
                 scheduledTime: payload.scheduledTime || '',
                 senderName: payload.senderName || 'Team',
+                senderEmail,
                 attendees,
                 timestamp: payload.timestamp || new Date().toISOString(),
               },

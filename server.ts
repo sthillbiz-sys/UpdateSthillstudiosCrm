@@ -747,6 +747,7 @@ async function startServer() {
           scheduledDate: typeof message.scheduledDate === "string" ? message.scheduledDate : "",
           scheduledTime: typeof message.scheduledTime === "string" ? message.scheduledTime : "",
           senderName: sender.name,
+          senderEmail: sender.email,
           attendees,
           timestamp: new Date().toISOString(),
         });
@@ -761,7 +762,7 @@ async function startServer() {
           }
 
           const recipientEmail = recipient.email.trim().toLowerCase();
-          if (!recipientEmail || !attendees.includes(recipientEmail)) {
+          if (!recipientEmail || recipientEmail === sender.email || !attendees.includes(recipientEmail)) {
             return;
           }
 

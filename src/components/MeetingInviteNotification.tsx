@@ -13,6 +13,7 @@ type MeetingInvite = {
   scheduledDate: string;
   scheduledTime: string;
   senderName: string;
+  senderEmail?: string;
   attendees: string[];
   timestamp: string;
 };
@@ -86,6 +87,7 @@ function buildInviteId(invite: Pick<MeetingInvite, 'meetingId' | 'roomName' | 's
 function normalizeInvite(invite: MeetingInvite): MeetingInvite {
   return {
     ...invite,
+    senderEmail: normalizeInviteEmail(invite.senderEmail),
     attendees: Array.isArray(invite.attendees)
       ? invite.attendees.map((attendee) => normalizeInviteEmail(attendee)).filter(Boolean)
       : [],
@@ -93,7 +95,27 @@ function normalizeInvite(invite: MeetingInvite): MeetingInvite {
   };
 }
 
+function dedupeInvites(invites: MeetingInvite[]): MeetingInvite[] {
+  const seen = new Set<string>();
+  const unique: MeetingInvite[] = [];
+
+  for (const rawInvite of invites) {
+    const invite = normalizeInvite(rawInvite);
+    if (!invite.id || seen.has(invite.id)) {
+      continue;
+    }
+    seen.add(invite.id);
+    unique.push(invite);
+  }
+
+  return unique;
+}
+
 function isInviteForUser(invite: MeetingInvite, currentUserEmail: string): boolean {
+  if (normalizeInviteEmail(invite.senderEmail) === currentUserEmail) {
+    return false;
+  }
+
   return invite.attendees.some((attendee) => normalizeInviteEmail(attendee) === currentUserEmail);
 }
 
@@ -129,21 +151,23 @@ export function MeetingInviteNotification({ onJoinMeeting }: Props) {
     }
 
     const seen = new Set(readSeenInvites());
-    const storedInvites = readActiveInvites()
-      .map((invite) => normalizeInvite(invite as MeetingInvite))
+    const storedInvites = dedupeInvites(
+      readActiveInvites().map((invite) => invite as MeetingInvite),
+    )
       .filter((invite) => !seen.has(invite.id))
       .filter((invite) => isInviteForUser(invite, currentUserEmail));
 
     setInvites(storedInvites);
 
-    const persistInviteList = (nextInvites: MeetingInvite[]) => {
-      const latestSeen = new Set(readSeenInvites());
-      const activeInvites = readActiveInvites()
-        .map((invite) => normalizeInvite(invite as MeetingInvite))
+      const persistInviteList = (nextInvites: MeetingInvite[]) => {
+        const latestSeen = new Set(readSeenInvites());
+      const activeInvites = dedupeInvites(
+        readActiveInvites().map((invite) => invite as MeetingInvite),
+      )
         .filter((invite) => !nextInvites.some((item) => item.id === invite.id))
         .filter((invite) => !latestSeen.has(invite.id));
 
-      writeActiveInvites([...nextInvites, ...activeInvites]);
+      writeActiveInvites(dedupeInvites([...nextInvites, ...activeInvites]));
     };
 
     const pushInvite = (incomingInvite: MeetingInvite) => {
@@ -179,6 +203,10 @@ export function MeetingInviteNotification({ onJoinMeeting }: Props) {
               return false;
             }
 
+            if (Number(meeting?.created_by_user_id || 0) === Number(user?.id || 0)) {
+              return false;
+            }
+
             const attendees = Array.isArray(meeting?.attendees)
               ? meeting.attendees
               : [];
@@ -201,6 +229,7 @@ export function MeetingInviteNotification({ onJoinMeeting }: Props) {
               scheduledDate: String(meeting?.scheduled_date || ''),
               scheduledTime: String(meeting?.scheduled_time || ''),
               senderName: 'Team',
+              senderEmail: '',
               attendees,
               timestamp: String(meeting?.created_at || new Date().toISOString()),
             });
@@ -228,7 +257,11 @@ export function MeetingInviteNotification({ onJoinMeeting }: Props) {
     writeSeenInvites(nextSeen);
     setInvites((current) => {
       const nextInvites = current.filter((invite) => invite.id !== inviteId);
-      writeActiveInvites(readActiveInvites().map((invite) => normalizeInvite(invite as MeetingInvite)).filter((invite) => invite.id !== inviteId));
+      writeActiveInvites(
+        dedupeInvites(
+          readActiveInvites().map((invite) => invite as MeetingInvite),
+        ).filter((invite) => invite.id !== inviteId),
+      );
       return nextInvites;
     });
   };
