@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
+import { apiGet } from '../lib/api';
 import { Phone, Clock, TrendingUp, BarChart3, Download } from 'lucide-react';
 
 interface CallReport {
-  id: string;
-  user_email: string;
+  id: number;
+  agent_name: string;
+  agent_email: string;
   contact_name: string;
   contact_phone: string;
   duration: number;
@@ -28,27 +29,48 @@ export function CallReports() {
     if (!user) return;
 
     try {
-      let query = supabase
-        .from('call_history')
-        .select('*')
-        .order('called_at', { ascending: false });
-
       const now = new Date();
-      if (filter === 'today') {
-        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        query = query.gte('called_at', today.toISOString());
-      } else if (filter === 'week') {
-        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        query = query.gte('called_at', weekAgo.toISOString());
-      } else if (filter === 'month') {
-        const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-        query = query.gte('called_at', monthAgo.toISOString());
-      }
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+      const weekAgo = now.getTime() - 7 * 24 * 60 * 60 * 1000;
+      const monthAgo = now.getTime() - 30 * 24 * 60 * 60 * 1000;
 
-      const { data, error } = await query;
+      const data = await apiGet<Array<Record<string, unknown>>>('/calls');
+      const mapped = (Array.isArray(data) ? data : []).map((row): CallReport => ({
+        id: Number(row.id || 0),
+        agent_name: String(row.agent_name || ''),
+        agent_email: String(row.agent_email || ''),
+        contact_name: String(row.contact_name || 'Outbound Call'),
+        contact_phone: String(row.phone_number || row.contact_phone || ''),
+        duration: Number(row.duration || 0),
+        outcome: String(row.status || row.outcome || ''),
+        notes: String(row.notes || ''),
+        called_at: String(row.timestamp || row.called_at || ''),
+      }));
 
-      if (error) throw error;
-      if (data) setReports(data);
+      const filtered = mapped.filter((report) => {
+        if (filter === 'all') {
+          return true;
+        }
+
+        const calledAt = Date.parse(report.called_at);
+        if (!Number.isFinite(calledAt)) {
+          return false;
+        }
+
+        if (filter === 'today') {
+          return calledAt >= today;
+        }
+        if (filter === 'week') {
+          return calledAt >= weekAgo;
+        }
+        if (filter === 'month') {
+          return calledAt >= monthAgo;
+        }
+
+        return true;
+      });
+
+      setReports(filtered);
     } catch (error) {
       console.error('Error loading call reports:', error);
     } finally {
@@ -84,10 +106,12 @@ export function CallReports() {
     return `${hours}h ${mins}m`;
   };
 
+  const formatOutcomeLabel = (outcome: string) => String(outcome || '').replace(/_/g, '-');
+
   const handleExportReport = () => {
     const headers = ['Agent', 'Contact', 'Phone', 'DurationMinutes', 'Outcome', 'CalledAt', 'Notes'];
     const rows = reports.map((report) => [
-      report.user_email || '',
+      report.agent_name || report.agent_email || '',
       report.contact_name || '',
       report.contact_phone || '',
       String(report.duration || 0),
@@ -262,7 +286,7 @@ export function CallReports() {
                 reports.map((report) => (
                   <tr key={report.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-4 text-sm text-gray-900">
-                      {report.user_email}
+                      {report.agent_name || report.agent_email || '-'}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-900 font-medium">
                       {report.contact_name}
@@ -278,12 +302,12 @@ export function CallReports() {
                         className={`px-2 py-1 rounded-full text-xs font-medium ${
                           report.outcome === 'successful' || report.outcome === 'completed'
                             ? 'bg-green-100 text-green-800'
-                            : report.outcome === 'no_answer'
+                            : report.outcome === 'no_answer' || report.outcome === 'no-answer'
                             ? 'bg-yellow-100 text-yellow-800'
                             : 'bg-red-100 text-red-800'
                         }`}
                       >
-                        {report.outcome}
+                        {formatOutcomeLabel(report.outcome)}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">

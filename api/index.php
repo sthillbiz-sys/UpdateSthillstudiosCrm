@@ -1489,12 +1489,19 @@ try {
     }
 
     if ($route === 'calls' && $method === 'GET') {
+        $selectCallsSql = 'SELECT
+                c.*,
+                COALESCE(u.name, "") AS agent_name,
+                COALESCE(u.email, "") AS agent_email
+             FROM calls c
+             LEFT JOIN users u ON u.id = c.created_by_user_id';
+
         if ($canViewAllCalls) {
-            $rows = db()->query('SELECT * FROM calls ORDER BY timestamp DESC')->fetchAll();
+            $rows = db()->query($selectCallsSql . ' ORDER BY c.timestamp DESC')->fetchAll();
             json_response($rows);
         }
 
-        $stmt = db()->prepare('SELECT * FROM calls WHERE created_by_user_id = ? ORDER BY timestamp DESC');
+        $stmt = db()->prepare($selectCallsSql . ' WHERE c.created_by_user_id = ? ORDER BY c.timestamp DESC');
         $stmt->execute([$authUserId]);
         $rows = $stmt->fetchAll();
         json_response($rows);
